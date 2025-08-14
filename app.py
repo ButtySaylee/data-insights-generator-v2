@@ -15,6 +15,9 @@ import re
 from datetime import datetime
 from io import StringIO
 
+# Set page config for mobile-friendly design
+st.set_page_config(layout="wide", page_title="Data Insights Generator")
+
 # Initialize session state for navigation
 if 'current_page' not in st.session_state:
     st.session_state['current_page'] = 'login'
@@ -217,8 +220,6 @@ if os.path.exists(scale_path):
 else:
     print(f"Scale file not found: {scale_path}")
 
-# Set page config for mobile-friendly design
-st.set_page_config(layout="wide", page_title="Data Insights Generator")
 
 st.markdown("""
     <style>
