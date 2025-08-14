@@ -16,6 +16,10 @@ from datetime import datetime
 from io import StringIO
 import hashlib
 import secrets
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError
+import io  # For in-memory file handling
+from urllib.parse import quote_plus
 
 
 # Function to connect to Google Sheets
@@ -129,6 +133,67 @@ def update_user_password(school_id, new_password):
             return False, "School ID not found. Could not update password."
     except Exception as e:
         return False, f"An error occurred while updating password: {str(e)}"
+    
+
+# Function to connect to MongoDB collection
+@st.cache_resource  # Cache for efficiency
+def get_mongo_collection():
+    # Encode username and password
+    username = quote_plus(st.secrets["mongo"]["username"])
+    password = quote_plus(st.secrets["mongo"]["password"])
+    host = st.secrets["mongo"]["host"]
+    db_name = st.secrets["mongo"]["db_name"]
+    collection_name = st.secrets["mongo"]["collection_name"]
+
+    # Construct the URI with encoded credentials
+    uri = f"mongodb+srv://{username}:{password}@{host}/{db_name}?retryWrites=true&w=majority"
+    
+    client = MongoClient(uri)
+    db = client[db_name]
+    collection = db[collection_name]
+    return collection
+
+# Function to upload file to MongoDB (store as binary)
+def upload_file_to_mongo(school_id, uploaded_file):
+    collection = get_mongo_collection()
+    try:
+        file_data = uploaded_file.getvalue()  # Bytes
+        timestamp = datetime.now()
+        doc = {
+            "school_id": school_id,
+            "filename": uploaded_file.name,
+            "file_data": file_data,  # Binary data
+            "timestamp": timestamp
+        }
+        collection.insert_one(doc)
+        return True
+    except PyMongoError as e:
+        st.error(f"Upload error: {e}")
+        return False
+
+# Function to list user's files from MongoDB
+def list_user_files(school_id):
+    collection = get_mongo_collection()
+    try:
+        files = list(collection.find({"school_id": school_id}, {"_id": 0, "filename": 1, "timestamp": 1}).sort("timestamp", -1))
+        return files  # List of dicts: [{'filename': 'file.csv', 'timestamp': datetime}]
+    except PyMongoError as e:
+        st.error(f"Error listing files: {e}")
+        return []
+
+# Function to download file from MongoDB by filename (latest if duplicates)
+def download_file_from_mongo(school_id, filename):
+    collection = get_mongo_collection()
+    try:
+        file_doc = collection.find_one({"school_id": school_id, "filename": filename}, sort=[("timestamp", -1)])
+        if file_doc:
+            return io.BytesIO(file_doc["file_data"])  # Return BytesIO for processing
+        else:
+            st.error("File not found.")
+            return None
+    except PyMongoError as e:
+        st.error(f"Download error: {e}")
+        return None
 
 # Set page config for mobile-friendly design
 st.set_page_config(layout="wide", page_title="Data Insights Generator")
@@ -256,7 +321,8 @@ if st.session_state['current_page'] == 'login':
 
             if forgot_password_button:
                 navigate_to('forgot_password')
-                    
+                st.rerun()
+
         # Add custom CSS to reduce the size of the "Show Password" text
         st.markdown("""
         <style>
@@ -596,6 +662,7 @@ if st.session_state['current_page'] == 'landing':
     with col1:
         if st.button("Start Exploring", key="start_exploring_button", use_container_width=True):
             navigate_to('main')
+            st.rerun()
     with col2:
         if st.button("Back to Login", key="back_to_login_from_landing", use_container_width=True):
             # Clear user-specific session state to effectively log out
@@ -618,61 +685,119 @@ questionnaire_mapping = {
 # Add a "Back" button to navigate to the landing page
 if st.button("Back to Landing Page", key="back_button"):
     navigate_to('landing')
+    st.rerun()
     
 # Main Page
 if st.session_state['current_page'] == 'main':
     st.title("Data Insights Generator")
     st.write("Explore your data and generate insights.")
 
-    # Existing main page content goes here
-# Upload Data with Drag-and-Drop
-uploaded_file = st.file_uploader("Choose a file", type=["csv", "xlsx", "xls", "txt"])
+    df = None  # Initialize df
+    file_source = None  # Track if from upload or history
 
+    # File Uploader with History (MongoDB-based)
+    if 'logged_in_user' in st.session_state:
+        school_id = st.session_state['logged_in_user']
+        
+        # List history
+        history_files = list_user_files(school_id)
+        if history_files:
+            st.subheader("Upload New File or Select from History")
 
-if uploaded_file is not None:
-    # Determine file type and read accordingly
-    file_type = uploaded_file.name.split('.')[-1].lower()
-    try:
-        if file_type in ["csv", "txt"]:
-            stringio = StringIO(uploaded_file.getvalue().decode("utf-8"))
-            df = pd.read_csv(stringio)
-        elif file_type in ["xlsx", "xls"]:
-            df = pd.read_excel(uploaded_file)
+            # Create display options with timestamps
+            history_options = []
+            for f in history_files:
+                ts = f.get('timestamp')
+                # Ensure timestamp is a datetime object before formatting
+                if isinstance(ts, datetime):
+                    display_text = f"{f['filename']} (Uploaded: {ts.strftime('%Y-%m-%d %H:%M')})"
+                else:
+                    display_text = f['filename']  # Fallback if no timestamp
+                history_options.append(display_text)
+
+            selected_option = st.selectbox(
+                "Select a previous file",
+                options=["-- New Upload --"] + history_options,
+                help="Choose a previously uploaded file or upload a new one."
+            )
+            
+            if selected_option != "-- New Upload --":
+                # Extract the original filename from the selected option
+                match = re.match(r"^(.*?) \(Uploaded: .*\)$", selected_option)
+                if match:
+                    selected_file_name = match.group(1)
+                else:
+                    selected_file_name = selected_option # Fallback for old files without timestamp
+                # Load from history
+                downloaded_file = download_file_from_mongo(school_id, selected_file_name)
+                if downloaded_file:
+                    file_source = "history"
+                    file_type = selected_file_name.split('.')[-1].lower()
+                    st.success(f"Loaded {selected_file_name} from history.")
         else:
-            st.error("Unsupported file format. Please upload a CSV, TXT, XLS, or XLSX file.")
+            st.info("No previous files found in your history.")
+    
+    # Standard Uploader (always show, but if history selected, skip upload)
+    if file_source != "history":
+        uploaded_file = st.file_uploader("Choose a file", type=["csv", "xlsx", "xls", "txt"])
+        if uploaded_file:
+            # Upload to MongoDB if logged in
+            if 'logged_in_user' in st.session_state:
+                success = upload_file_to_mongo(school_id, uploaded_file)
+                if success:
+                    st.success(f"File uploaded to your history: {uploaded_file.name}")
+            file_source = "upload"
+
+    # Process the File (from upload or history)
+    if file_source:
+        try:
+            if file_source == "history":
+                content = downloaded_file  # BytesIO from MongoDB
+            else:
+                uploaded_file.seek(0)
+                content = io.BytesIO(uploaded_file.getvalue())
+            
+            file_type = (selected_file_name if file_source == "history" else uploaded_file.name).split('.')[-1].lower()
+            
+            if file_type in ["csv", "txt"]:
+                df = pd.read_csv(content)
+            elif file_type in ["xlsx", "xls"]:
+                df = pd.read_excel(content)
+            else:
+                st.error("Unsupported file format.")
+                st.stop()
+
+            # Your existing data processing (timestamp removal, preview, etc.)
+            timestamp_keywords = ['timestamp', 'date', 'time', 'created', 'submitted', 'record', 'entry', 'logged']
+            timestamp_cols = [col for col in df.columns if any(keyword in col.lower() for keyword in timestamp_keywords)]
+            if timestamp_cols:
+                df = df.drop(columns=timestamp_cols)
+                st.write(f"Removed timestamp columns: {', '.join(timestamp_cols)}")
+
+            st.write(f"File loaded: {selected_file_name if file_source == 'history' else uploaded_file.name}")
+            st.write(f"File size: {content.getbuffer().nbytes} bytes")
+            st.write(f"Number of columns: {df.shape[1]}")
+
+            st.write("### Data Preview")
+            col1, col2 = st.columns([8, 2])
+            with col1:
+                show_preview = st.toggle("Show Table", value=True, key="toggle_preview")
+            if show_preview:
+                st.dataframe(df.head())
+
+            st.session_state['df_cleaned'] = df.copy()
+
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
             st.stop()
 
-        # Automatically remove timestamp-like columns
-        timestamp_keywords = ['timestamp', 'date', 'time', 'created', 'submitted', 'record', 'entry', 'logged']
-        timestamp_cols = [col for col in df.columns if any(keyword in col.lower() for keyword in timestamp_keywords)]
-        if timestamp_cols:
-            df = df.drop(columns=timestamp_cols)
-            st.write(f"Removed timestamp columns: {', '.join(timestamp_cols)}")
-
-        # Display file details
-        #st.write(f"File uploaded: {uploaded_file.name}")
-        st.write(f"File size: {uploaded_file.size} bytes")
-        num_columns = df.shape[1]  # shape returns (rows, columns), we want the second element (columns)
-        st.write(f"Number of columns: {num_columns}")
-
-        st.write("### Data Preview")
-        col1, col2 = st.columns([8, 2])
-        with col1:
-            show_preview = st.toggle("Show Table", value=True, key="toggle_preview")
-        if show_preview:
-            st.dataframe(df.head())
-
-        # Optional: Empty cleaning options expander (simplified as per request)
-        with st.expander("Data Cleaning Options"):
-            pass  # Removed duplicate rows and missing values options
-
-        if 'df_cleaned' not in st.session_state:
-            st.session_state['df_cleaned'] = df.copy()  # Initialize
-
-    except Exception as e:
-        st.error(f"Error processing file: {str(e)}. Please upload a valid CSV, TXT, XLS, or XLSX file.")
-        st.stop()
+    # Rest of your main page code (insights, dashboard, etc.) remains unchanged
     
+    # Rest of your main page code (insights, dashboard, etc.) remains the same
+    # Ensure df is not None before accessing its columns
+    if df is None:
+        st.error("No data available. Please upload a valid file.")
+        st.stop()
     # Detect questionnaire columns dynamically
     questionnaire_cols = [col for col in df.columns if any(str(val).strip().title() in questionnaire_mapping for val in df[col].dropna())]
 
