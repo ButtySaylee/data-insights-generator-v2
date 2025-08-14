@@ -15,6 +15,162 @@ import re
 from datetime import datetime
 from io import StringIO
 
+# Initialize session state for navigation
+if 'current_page' not in st.session_state:
+    st.session_state['current_page'] = 'login'
+    
+# Define the navigate_to function
+def navigate_to(page):
+    st.session_state['current_page'] = page
+    
+# Custom CSS for consistent theme and centering
+st.markdown("""
+    <style>
+        .stApp {
+            background-color: #d6ecf9;
+            font-family: 'Segoe UI', sans-serif;
+            color: black !important;
+        }
+        h1, h2, h3, h4 {
+            color: #003366 !important;
+        }
+        .stTextInput > div > div > input {
+            background-color: #ff6666 !important;
+            color: white !important;
+            border-radius: 20px !important;
+            padding: 12px !important;
+            border: none !important;
+            font-size: 16px !important;
+        }
+        .stTextInput > div > div > input::placeholder {
+            color: white !important;
+            opacity: 0.8 !important;
+        }
+        .forgot-link {
+            color: #ff6666 !important;
+            font-size: 14px;
+            text-decoration: none;
+        }
+        .pulse-text {
+            text-align: center;
+            font-size: 18px;
+            color: #ff6666;
+            margin-top: 20px;
+        }
+        .bubble {
+            background-color: #ff9999;
+            color: #003366;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-left: 8px;
+        }
+        .stTextInput label {
+            color: black !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+    
+# Login Page
+if st.session_state['current_page'] == 'login':
+    # Load and encode logo
+    logo_base64 = ""
+    logo_path = "images/project_apnapan_logo.png"
+    if os.path.exists(logo_path):
+        try:
+            with open(logo_path, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode()
+            print(f"Logo loaded successfully: {logo_path}, length: {len(logo_base64)}")
+        except Exception as e:
+            print(f"Error loading logo: {e}")
+    else:
+        print(f"Logo file not found: {logo_path}")
+
+    # Display title and logo
+    st.markdown("<h1 style='text-align: center; color: white;'>Apnapan Pulse</h1>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div style="display: flex; justify-content: center; margin-bottom: 30px;">
+        <img src="data:image/png;base64,{logo_base64}" alt="Project Apnapan Logo" style="height: 100px;" />
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Login form container
+    st.markdown("<div class='login-container'>", unsafe_allow_html=True)
+    st.markdown("<h3 style='text-align: center; color: black;'>Log in credentials</h3>", unsafe_allow_html=True)
+
+    with st.form(key="login_form"):
+        school_id = st.text_input("School ID", placeholder="Enter your school ID")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            password = st.text_input("Password", placeholder="Enter your security pin", type="password")
+        with col2:
+            st.markdown("<a href='#' class='forgot-link'>Forgot Password?</a>", unsafe_allow_html=True)
+
+        st.markdown("""
+        <style>
+            div[data-testid="stForm"] button {
+                background-color: black !important;
+                color: white !important;
+                border-radius: 12px !important;
+                padding: 12px 24px !important;
+                border: none !important;
+                font-size: 16px !important;
+                font-weight: bold !important;
+                box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.2) !important;
+            }
+            div[data-testid="stForm"] button:hover {
+                background-color: #333333 !important; /* Slightly lighter black on hover */
+                color: white !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
+        # Two-column layout for buttons
+        button_col1, button_col2 = st.columns([1, 1])
+        with button_col1:
+            submitted = st.form_submit_button("Find your pulse!", help="Click to log in")
+        with button_col2:
+            if st.form_submit_button("Create Account", help="Click to create a new account"):
+                navigate_to('create_account')
+
+    if submitted:
+        if school_id == "abc" and password == "1234":
+            st.success("Login successful!")
+            navigate_to('landing')
+        else:
+            st.error("Invalid School ID or Password. Please try again.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.stop()
+    
+# Create Account Page
+if st.session_state['current_page'] == 'create_account':
+    st.title("Create Account")
+    st.write("Fill in the details below to create a new account.")
+
+    with st.form(key="create_account_form"):
+        new_school_id = st.text_input("School ID", placeholder="Enter your school ID")
+        new_password = st.text_input("Password", placeholder="Enter your password", type="password")
+        confirm_password = st.text_input("Confirm Password", placeholder="Re-enter your password", type="password")
+        email = st.text_input("Email", placeholder="Enter your email address")
+
+        submitted = st.form_submit_button("Create Account")
+        if submitted:
+            if new_password != confirm_password:
+                st.error("Passwords do not match. Please try again.")
+            elif not new_school_id or not new_password or not email:
+                st.error("All fields are required. Please fill in all the details.")
+            else:
+                st.success("Account created successfully! You can now log in.")
+                navigate_to('login')
+
+    st.stop()
+
 # Function to connect to Google Sheets
 def connect_to_google_sheet(sheet_name):
     # Define the scope
@@ -238,8 +394,7 @@ if st.session_state['current_page'] == 'landing':
         
     # Show sample data info directly under Step-4
     st.markdown("### Sample Data Preview")
-    st.write("""
-    To get the most out of this tool, your data should include:
+    st.write("""To get the most out of this tool, your data should include:
     - **Demographic Columns**: e.g., StudentID, Gender, Grade, Religion, Ethnicity
     - **Socio-Economic Status Indicators**: e.g., What items do you have at home? (Car, Laptop, Apna Ghar, etc.)
     - **Survey Responses**: e.g., 'Strongly Agree', 'Agree', 'Neutral', 'Disagree', 'Strongly Disagree'
@@ -257,7 +412,7 @@ if st.session_state['current_page'] == 'landing':
         mime="text/csv"
     )
 
- # Button to navigate to the main page
+    # Button to navigate to the main page
     if st.button("Start Exploring", key="start_exploring_button"):
         navigate_to('main') 
     st.stop()
