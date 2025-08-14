@@ -46,9 +46,9 @@ def hash_password(password, salt):
 def create_user_account(school_id, password, email):
     try:
         sheet = connect_to_google_sheet("Apnapan User Accounts")
-        # Check if school_id already exists
-        cell = sheet.find(school_id, in_column=1)
-        if cell:
+        # Fetch all existing school IDs to perform a reliable check
+        all_school_ids = sheet.col_values(1)
+        if school_id in all_school_ids:
             return False, "School ID already exists."
 
         # If cell is None, the ID is not found, so we can proceed.
@@ -67,9 +67,13 @@ def validate_login(school_id, password):
     """Validates user login using salted password hashes."""
     try:
         sheet = connect_to_google_sheet("Apnapan User Accounts")
-        cell = sheet.find(school_id, in_column=1)
-        if cell:
-            user_data = sheet.row_values(cell.row)
+        # Fetch all school IDs to perform a reliable check, avoiding data type issues with sheet.find()
+        all_school_ids = sheet.col_values(1)
+        
+        if school_id in all_school_ids:
+            # Find the row index (1-based) and fetch the corresponding user data
+            row_index = all_school_ids.index(school_id) + 1
+            user_data = sheet.row_values(row_index)
             # Assuming columns are: School ID (1), Password (2), Salt (3)
             stored_hash = user_data[1]
             salt = user_data[2]
@@ -91,9 +95,10 @@ def validate_reset_request(school_id, email):
     """Checks if the school_id and email match a record."""
     try:
         sheet = connect_to_google_sheet("Apnapan User Accounts")
-        cell = sheet.find(school_id, in_column=1)
-        if cell:
-            user_data = sheet.row_values(cell.row)
+        all_school_ids = sheet.col_values(1)
+        if school_id in all_school_ids:
+            row_index = all_school_ids.index(school_id) + 1
+            user_data = sheet.row_values(row_index)
             # Assuming columns: School ID (1), Password (2), Salt (3), Email (4)
             stored_email = user_data[3]
             if email.strip().lower() == stored_email.strip().lower():
@@ -110,13 +115,14 @@ def update_user_password(school_id, new_password):
     """Finds a user by school_id and updates their password."""
     try:
         sheet = connect_to_google_sheet("Apnapan User Accounts")
-        cell = sheet.find(school_id, in_column=1)
-        if cell:
-            user_data = sheet.row_values(cell.row)
+        all_school_ids = sheet.col_values(1)
+        if school_id in all_school_ids:
+            row_index = all_school_ids.index(school_id) + 1
+            user_data = sheet.row_values(row_index)
             # Assuming Salt is in column 3
             salt = user_data[2]
             new_hashed_password = hash_password(new_password, salt)
-            sheet.update_cell(cell.row, 2, new_hashed_password)  # Update password in column 2
+            sheet.update_cell(row_index, 2, new_hashed_password)  # Update password in column 2
             return True, "Password has been updated successfully!"
         else:
             # This case should ideally not be hit if the flow is correct
@@ -264,6 +270,7 @@ if st.session_state['current_page'] == 'login':
         if login_button:
             success, message = validate_login(school_id, password)
             if success:
+                st.session_state['logged_in_user'] = school_id # Store user's ID
                 st.success(message)
                 navigate_to('landing')
                 st.rerun()
@@ -584,9 +591,20 @@ if st.session_state['current_page'] == 'landing':
         mime="text/csv"
     )
 
-    # Button to navigate to the main page
-    if st.button("Start Exploring", key="start_exploring_button"):
-        navigate_to('main') 
+    # Buttons to navigate
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("Start Exploring", key="start_exploring_button", use_container_width=True):
+            navigate_to('main')
+    with col2:
+        if st.button("Back to Login", key="back_to_login_from_landing", use_container_width=True):
+            # Clear user-specific session state to effectively log out
+            if 'logged_in_user' in st.session_state:
+                del st.session_state['logged_in_user']
+            if 'df_cleaned' in st.session_state:
+                del st.session_state['df_cleaned']
+            navigate_to('login')
+            st.rerun()
     st.stop()
 
 # Questionnaire mapping
