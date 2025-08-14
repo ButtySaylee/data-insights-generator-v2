@@ -15,6 +15,7 @@ import re
 from datetime import datetime
 from io import StringIO
 import hashlib
+import secrets
 
 
 # Function to connect to Google Sheets
@@ -37,50 +38,91 @@ def connect_to_google_sheet(sheet_name):
     sheet = client.open(sheet_name).sheet1
     return sheet
 
-# Function to hash passwords
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+# Function to hash passwords with a salt for better security
+def hash_password(password, salt):
+    return hashlib.sha256(salt.encode() + password.encode()).hexdigest()
 
 # Function to create a new user account in Google Sheet
 def create_user_account(school_id, password, email):
     try:
         sheet = connect_to_google_sheet("Apnapan User Accounts")
         # Check if school_id already exists
-        existing_data = sheet.get_all_records()
-        existing_df = pd.DataFrame(existing_data)
-        if not existing_df.empty and 'School ID' in existing_df.columns:
-            if school_id in existing_df['School ID'].values:
-                return False, "School ID already exists."
-        
-        # Hash the password
-        hashed_password = hash_password(password)
+        cell = sheet.find(school_id, in_column=1)
+        if cell:
+            return False, "School ID already exists."
+
+        # If cell is None, the ID is not found, so we can proceed.
+        # Generate a salt and hash the password
+        salt = secrets.token_hex(16)
+        hashed_password = hash_password(password, salt)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # Append new user data
-        sheet.append_row([school_id, hashed_password, email, timestamp])
+        # Append new user data including the salt. Ensure your GSheet has a 'Salt' column.
+        sheet.append_row([school_id, hashed_password, salt, email, timestamp])
         return True, "Account created successfully!"
     except Exception as e:
         return False, f"Error creating account: {str(e)}"
 
 # Function to validate login credentials
 def validate_login(school_id, password):
+    """Validates user login using salted password hashes."""
     try:
         sheet = connect_to_google_sheet("Apnapan User Accounts")
-        data = sheet.get_all_records()
-        df = pd.DataFrame(data)
-        if df.empty:
-            return False, "No registered users found."
-        
-        hashed_password = hash_password(password)
-        user_row = df[df['School ID'] == school_id]
-        if not user_row.empty:
-            if user_row.iloc[0]['Password'] == hashed_password:
+        cell = sheet.find(school_id, in_column=1)
+        if cell:
+            user_data = sheet.row_values(cell.row)
+            # Assuming columns are: School ID (1), Password (2), Salt (3)
+            stored_hash = user_data[1]
+            salt = user_data[2]
+
+            # Hash the provided password with the stored salt and compare
+            hashed_input_password = hash_password(password, salt)
+            if hashed_input_password == stored_hash:
                 return True, "Login successful!"
             else:
                 return False, "Invalid password."
         else:
             return False, "School ID not found."
+
     except Exception as e:
         return False, f"Error validating login: {str(e)}"
+
+# Function to validate user for password reset
+def validate_reset_request(school_id, email):
+    """Checks if the school_id and email match a record."""
+    try:
+        sheet = connect_to_google_sheet("Apnapan User Accounts")
+        cell = sheet.find(school_id, in_column=1)
+        if cell:
+            user_data = sheet.row_values(cell.row)
+            # Assuming columns: School ID (1), Password (2), Salt (3), Email (4)
+            stored_email = user_data[3]
+            if email.strip().lower() == stored_email.strip().lower():
+                return True, "Verification successful. Please set your new password."
+            else:
+                return False, "The email address provided does not match our records for this School ID."
+        else:
+            return False, "School ID not found."
+    except Exception as e:
+        return False, f"An error occurred during verification: {str(e)}"
+
+# Function to update user password in the sheet
+def update_user_password(school_id, new_password):
+    """Finds a user by school_id and updates their password."""
+    try:
+        sheet = connect_to_google_sheet("Apnapan User Accounts")
+        cell = sheet.find(school_id, in_column=1)
+        if cell:
+            user_data = sheet.row_values(cell.row)
+            # Assuming Salt is in column 3
+            salt = user_data[2]
+            new_hashed_password = hash_password(new_password, salt)
+            sheet.update_cell(cell.row, 2, new_hashed_password)  # Update password in column 2
+            return True, "Password has been updated successfully!"
+        else:
+            # This case should ideally not be hit if the flow is correct
+            return False, "School ID not found. Could not update password."
+    except Exception as e:
+        return False, f"An error occurred while updating password: {str(e)}"
 
 # Set page config for mobile-friendly design
 st.set_page_config(layout="wide", page_title="Data Insights Generator")
@@ -142,6 +184,24 @@ st.markdown("""
         .stTextInput label {
             color: black !important;
         }
+
+        button, .stDownloadButton button {{
+            background-color: #ff6666 !important;
+            color: white !important;
+            border-radius: 8px;
+        }}
+
+        /* Ensure text inside all buttons is white */
+        div[data-testid="stForm"] button p,
+        div[data-testid="stButton"] > button p {
+            color: white !important;
+        }
+
+        /* Hover effect for all buttons */
+        div[data-testid="stForm"] button:hover,
+        div[data-testid="stButton"] > button:hover {
+            background-color: #333333 !important; /* Slightly lighter black on hover */
+        }
     </style>
 """, unsafe_allow_html=True)
     
@@ -178,14 +238,18 @@ if st.session_state['current_page'] == 'login':
         with col2:  # Center the input fields
             school_id = st.text_input("School ID", placeholder="Enter your school ID", key="school_id")
             password = st.text_input("Password", placeholder="Enter your security pin", type="password", key="password")
-            st.markdown("<a href='#' class='forgot-link'>Forgot Password?</a>", unsafe_allow_html=True)
-            # Place both buttons on the same line using columns
-            button_col1, button_col2 = st.columns([1, 1])  # Two equal-width columns for buttons
-            with button_col1:
-                submitted = st.form_submit_button("Find your pulse!", help="Click to log in")
-            with button_col2:
-                if st.form_submit_button("Create Account", help="Click to create a new account"):
-                    navigate_to('create_account')
+            
+            login_button = st.form_submit_button("Find your pulse!", use_container_width=True)
+
+            # Use columns for the other two actions
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                create_account_button = st.form_submit_button("Create Account", use_container_width=True, help="Click to create a new account")
+            with col_b2:
+                forgot_password_button = st.form_submit_button("Forgot Password?", use_container_width=True, help="Click to reset your password")
+
+            if forgot_password_button:
+                navigate_to('forgot_password')
                     
         # Add custom CSS to reduce the size of the "Show Password" text
         st.markdown("""
@@ -197,36 +261,20 @@ if st.session_state['current_page'] == 'login':
         </style>
         """, unsafe_allow_html=True)
 
-        st.markdown("""
-        <style>
-            div[data-testid="stForm"] button {
-                background-color: black !important;
-                color: white !important;
-                border-radius: 12px !important;
-                padding: 12px 24px !important;
-                border: none !important;
-                font-size: 16px !important;
-                font-weight: bold !important;
-                box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.2) !important;
-                width: 100%; /* Ensure the button takes full width of the column */
-            }
-            div[data-testid="stForm"] button:hover {
-                background-color: #333333 !important; /* Slightly lighter black on hover */
-                color: white !important;
-            }
-        </style>
-        """, unsafe_allow_html=True)
-
-        if submitted:
+        if login_button:
             success, message = validate_login(school_id, password)
             if success:
                 st.success(message)
                 navigate_to('landing')
+                st.rerun()
             else:
                 st.error(message)
 
-    st.markdown("</div>", unsafe_allow_html=True)
+        if create_account_button:
+            navigate_to('create_account')
+            st.rerun()
 
+    st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
     
 # Create Account Page
@@ -251,8 +299,81 @@ if st.session_state['current_page'] == 'create_account':
                 if success:
                     st.success(message)
                     navigate_to('login')
+                    st.rerun()
                 else:
                     st.error(message)
+
+    if st.button("Back to Login", key="back_to_login_from_create"):
+        navigate_to('login')
+        st.rerun()
+
+    st.stop()
+
+# Forgot Password Page
+if st.session_state['current_page'] == 'forgot_password':
+    st.title("Reset Your Password")
+
+    # Initialize state for the multi-step form
+    if 'reset_step' not in st.session_state:
+        st.session_state.reset_step = 1
+    if 'reset_school_id' not in st.session_state:
+        st.session_state.reset_school_id = None
+
+    # Step 1: Verify User
+    if st.session_state.reset_step == 1:
+        st.write("Enter your School ID and registered email to verify your account.")
+        with st.form(key="verify_user_form"):
+            school_id = st.text_input("School ID", placeholder="Enter your school ID")
+            email = st.text_input("Registered Email", placeholder="Enter the email you signed up with")
+            
+            submitted = st.form_submit_button("Verify Account")
+            if submitted:
+                if not school_id or not email:
+                    st.error("Please enter both your School ID and email address.")
+                else:
+                    success, message = validate_reset_request(school_id, email)
+                    if success:
+                        st.session_state.reset_school_id = school_id
+                        st.session_state.reset_step = 2
+                        st.success(message)
+                        st.rerun()
+                    else:
+                        st.error(message)
+
+    # Step 2: Set New Password
+    elif st.session_state.reset_step == 2:
+        st.write(f"Account verified for School ID: **{st.session_state.reset_school_id}**")
+        st.write("You can now set a new password.")
+        with st.form(key="set_new_password_form"):
+            new_password = st.text_input("New Password", type="password")
+            confirm_password = st.text_input("Confirm New Password", type="password")
+
+            submitted = st.form_submit_button("Set New Password")
+            if submitted:
+                if not new_password or not confirm_password:
+                    st.error("Please fill out both password fields.")
+                elif new_password != confirm_password:
+                    st.error("Passwords do not match. Please try again.")
+                else:
+                    success, message = update_user_password(st.session_state.reset_school_id, new_password)
+                    if success:
+                        st.success(message)
+                        st.info("You can now log in with your new password.")
+                        # Reset state and prepare for navigation
+                        del st.session_state.reset_step
+                        del st.session_state.reset_school_id
+                    else:
+                        st.error(message)
+
+    # Always show the back to login button, but handle state reset
+    if st.button("Back to Login", key="back_to_login_from_forgot"):
+        # Clean up state if user navigates away mid-process
+        if 'reset_step' in st.session_state:
+            del st.session_state.reset_step
+        if 'reset_school_id' in st.session_state:
+            del st.session_state.reset_school_id
+        navigate_to('login')
+        st.rerun()
 
     st.stop()
 
@@ -330,11 +451,6 @@ st.markdown(f"""
         }}
         .stMetric label, .stMetric span {{
             color: #003366 !important;
-        }}
-        button, .stDownloadButton button {{
-            background-color: #ff6666 !important;
-            color: white !important;
-            border-radius: 8px;
         }}
         .stFileUploader {{
             border: 2px dashed #3366cc;
