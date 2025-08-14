@@ -14,6 +14,73 @@ import os
 import re
 from datetime import datetime
 from io import StringIO
+import hashlib
+
+
+# Function to connect to Google Sheets
+def connect_to_google_sheet(sheet_name):
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds_dict = {
+        "type": st.secrets["connections"]["gsheets"]["type"],
+        "project_id": st.secrets["connections"]["gsheets"]["project_id"],
+        "private_key_id": st.secrets["connections"]["gsheets"]["private_key_id"],
+        "private_key": st.secrets["connections"]["gsheets"]["private_key"],
+        "client_email": st.secrets["connections"]["gsheets"]["client_email"],
+        "client_id": st.secrets["connections"]["gsheets"]["client_id"],
+        "auth_uri": st.secrets["connections"]["gsheets"]["auth_uri"],
+        "token_uri": st.secrets["connections"]["gsheets"]["token_uri"],
+        "auth_provider_x509_cert_url": st.secrets["connections"]["gsheets"]["auth_provider_x509_cert_url"],
+        "client_x509_cert_url": st.secrets["connections"]["gsheets"]["client_x509_cert_url"]
+    }
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    sheet = client.open(sheet_name).sheet1
+    return sheet
+
+# Function to hash passwords
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# Function to create a new user account in Google Sheet
+def create_user_account(school_id, password, email):
+    try:
+        sheet = connect_to_google_sheet("Apnapan User Accounts")
+        # Check if school_id already exists
+        existing_data = sheet.get_all_records()
+        existing_df = pd.DataFrame(existing_data)
+        if not existing_df.empty and 'School ID' in existing_df.columns:
+            if school_id in existing_df['School ID'].values:
+                return False, "School ID already exists."
+        
+        # Hash the password
+        hashed_password = hash_password(password)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Append new user data
+        sheet.append_row([school_id, hashed_password, email, timestamp])
+        return True, "Account created successfully!"
+    except Exception as e:
+        return False, f"Error creating account: {str(e)}"
+
+# Function to validate login credentials
+def validate_login(school_id, password):
+    try:
+        sheet = connect_to_google_sheet("Apnapan User Accounts")
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        if df.empty:
+            return False, "No registered users found."
+        
+        hashed_password = hash_password(password)
+        user_row = df[df['School ID'] == school_id]
+        if not user_row.empty:
+            if user_row.iloc[0]['Password'] == hashed_password:
+                return True, "Login successful!"
+            else:
+                return False, "Invalid password."
+        else:
+            return False, "School ID not found."
+    except Exception as e:
+        return False, f"Error validating login: {str(e)}"
 
 # Set page config for mobile-friendly design
 st.set_page_config(layout="wide", page_title="Data Insights Generator")
@@ -106,12 +173,29 @@ if st.session_state['current_page'] == 'login':
     st.markdown("<h3 style='text-align: center; color: black;'>Log in credentials</h3>", unsafe_allow_html=True)
 
     with st.form(key="login_form"):
-        school_id = st.text_input("School ID", placeholder="Enter your school ID")
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            password = st.text_input("Password", placeholder="Enter your security pin", type="password")
-        with col2:
+    # Center the input fields using columns
+        col1, col2, col3 = st.columns([1, 2, 1])  # Left padding, content, right padding
+        with col2:  # Center the input fields
+            school_id = st.text_input("School ID", placeholder="Enter your school ID", key="school_id")
+            password = st.text_input("Password", placeholder="Enter your security pin", type="password", key="password")
             st.markdown("<a href='#' class='forgot-link'>Forgot Password?</a>", unsafe_allow_html=True)
+            # Place both buttons on the same line using columns
+            button_col1, button_col2 = st.columns([1, 1])  # Two equal-width columns for buttons
+            with button_col1:
+                submitted = st.form_submit_button("Find your pulse!", help="Click to log in")
+            with button_col2:
+                if st.form_submit_button("Create Account", help="Click to create a new account"):
+                    navigate_to('create_account')
+                    
+        # Add custom CSS to reduce the size of the "Show Password" text
+        st.markdown("""
+        <style>
+            label[for="password"] {
+                font-size: 12px !important; /* Reduce font size */
+                color: #666 !important; /* Optional: Change color */
+            }
+        </style>
+        """, unsafe_allow_html=True)
 
         st.markdown("""
         <style>
@@ -124,6 +208,7 @@ if st.session_state['current_page'] == 'login':
                 font-size: 16px !important;
                 font-weight: bold !important;
                 box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.2) !important;
+                width: 100%; /* Ensure the button takes full width of the column */
             }
             div[data-testid="stForm"] button:hover {
                 background-color: #333333 !important; /* Slightly lighter black on hover */
@@ -132,20 +217,13 @@ if st.session_state['current_page'] == 'login':
         </style>
         """, unsafe_allow_html=True)
 
-        # Two-column layout for buttons
-        button_col1, button_col2 = st.columns([1, 1])
-        with button_col1:
-            submitted = st.form_submit_button("Find your pulse!", help="Click to log in")
-        with button_col2:
-            if st.form_submit_button("Create Account", help="Click to create a new account"):
-                navigate_to('create_account')
-
-    if submitted:
-        if school_id == "abc" and password == "1234":
-            st.success("Login successful!")
-            navigate_to('landing')
-        else:
-            st.error("Invalid School ID or Password. Please try again.")
+        if submitted:
+            success, message = validate_login(school_id, password)
+            if success:
+                st.success(message)
+                navigate_to('landing')
+            else:
+                st.error(message)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -169,37 +247,14 @@ if st.session_state['current_page'] == 'create_account':
             elif not new_school_id or not new_password or not email:
                 st.error("All fields are required. Please fill in all the details.")
             else:
-                st.success("Account created successfully! You can now log in.")
-                navigate_to('login')
+                success, message = create_user_account(new_school_id, new_password, email)
+                if success:
+                    st.success(message)
+                    navigate_to('login')
+                else:
+                    st.error(message)
 
     st.stop()
-
-# Function to connect to Google Sheets
-def connect_to_google_sheet(sheet_name):
-    # Define the scope
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-
-    # Use Streamlit secrets for credentials
-    creds_dict = {
-        "type": st.secrets["connections"]["gsheets"]["type"],
-        "project_id": st.secrets["connections"]["gsheets"]["project_id"],
-        "private_key_id": st.secrets["connections"]["gsheets"]["private_key_id"],
-        "private_key": st.secrets["connections"]["gsheets"]["private_key"],
-        "client_email": st.secrets["connections"]["gsheets"]["client_email"],
-        "client_id": st.secrets["connections"]["gsheets"]["client_id"],
-        "auth_uri": st.secrets["connections"]["gsheets"]["auth_uri"],
-        "token_uri": st.secrets["connections"]["gsheets"]["token_uri"],
-        "auth_provider_x509_cert_url": st.secrets["connections"]["gsheets"]["auth_provider_x509_cert_url"],
-        "client_x509_cert_url": st.secrets["connections"]["gsheets"]["client_x509_cert_url"]
-    }
-
-    # Authorize the client
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-
-    # Open the Google Sheet
-    sheet = client.open(sheet_name).sheet1
-    return sheet
 
 # Initialize session state for navigation
 if 'current_page' not in st.session_state:
