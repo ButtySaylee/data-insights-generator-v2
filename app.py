@@ -255,6 +255,9 @@ st.markdown("""
         .stTextInput label {
             color: black !important;
         }
+        .stFileUploader label {
+            color: black !important;
+        }
 
         button, .stDownloadButton button {{
             background-color: #ff6666 !important;
@@ -351,6 +354,34 @@ if st.session_state['current_page'] == 'login':
     st.stop()
     
 # Create Account Page
+# ...existing code...
+
+# Function to create a new user account in Google Sheet
+def create_user_account(school_id, password, email, school_name, logo_file):
+    try:
+        sheet = connect_to_google_sheet("Apnapan User Accounts")
+        all_school_ids = sheet.col_values(1)
+        if school_id in all_school_ids:
+            return False, "School ID already exists."
+
+        # Generate a salt and hash the password
+        salt = secrets.token_hex(16)
+        hashed_password = hash_password(password, salt)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Handle logo upload
+        logo_base64 = ""
+        if logo_file:
+            logo_bytes = logo_file.read()
+            logo_base64 = base64.b64encode(logo_bytes).decode()  # Convert to base64 string
+
+        # Append new user data including the school name and logo
+        sheet.append_row([school_id, hashed_password, salt, email, school_name, logo_base64, timestamp])
+        return True, "Account created successfully!"
+    except Exception as e:
+        return False, f"Error creating account: {str(e)}"
+
+# Update the Create Account Page
 if st.session_state['current_page'] == 'create_account':
     st.title("Create Account")
     st.write("Fill in the details below to create a new account.")
@@ -360,15 +391,17 @@ if st.session_state['current_page'] == 'create_account':
         new_password = st.text_input("Password", placeholder="Enter your password", type="password")
         confirm_password = st.text_input("Confirm Password", placeholder="Re-enter your password", type="password")
         email = st.text_input("Email", placeholder="Enter your email address")
+        school_name = st.text_input("School Name", placeholder="Enter your school name")
+        logo_file = st.file_uploader("Upload School Logo (Optional)", type=["png", "jpg", "jpeg"])
 
         submitted = st.form_submit_button("Create Account")
         if submitted:
             if new_password != confirm_password:
                 st.error("Passwords do not match. Please try again.")
-            elif not new_school_id or not new_password or not email:
-                st.error("All fields are required. Please fill in all the details.")
+            elif not new_school_id or not new_password or not email or not school_name:
+                st.error("All fields except the logo are required. Please fill in all the details.")
             else:
-                success, message = create_user_account(new_school_id, new_password, email)
+                success, message = create_user_account(new_school_id, new_password, email, school_name, logo_file)
                 if success:
                     st.success(message)
                     navigate_to('login')
@@ -485,13 +518,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Load and encode logo
-logo_base64 = ""
+project_logo_base64 = ""
 logo_path = "images/project_apnapan_logo.png"  # Adjust this path to match your file location
 if os.path.exists(logo_path):
     try:
         with open(logo_path, "rb") as img_file:
-            logo_base64 = base64.b64encode(img_file.read()).decode()
-        print(f"Logo loaded successfully: {logo_path}, length: {len(logo_base64)}")
+            project_logo_base64 = base64.b64encode(img_file.read()).decode()
+        print(f"Logo loaded successfully: {logo_path}, length: {len(project_logo_base64)}")
     except Exception as e:
         print(f"Error loading logo: {e}")
     else:
@@ -562,7 +595,7 @@ st.markdown(f"""
         }}
     </style>
     <div class="custom-logo">
-        <img src="data:image/png;base64,{logo_base64}" alt="Project Apnapan Logo" />
+        <img src="data:image/png;base64,{project_logo_base64}" alt="Project Apnapan Logo" />
         <span>Project Apnapan</span>
     </div>
 """, unsafe_allow_html=True)
@@ -686,9 +719,60 @@ questionnaire_mapping = {
 if st.button("Back to Landing Page", key="back_button"):
     navigate_to('landing')
     st.rerun()
+
+# Function to fetch school details
+def get_school_details(school_id):
+    try:
+        sheet = connect_to_google_sheet("Apnapan User Accounts")
+        all_school_ids = sheet.col_values(1)
+        if school_id in all_school_ids:
+            row_index = all_school_ids.index(school_id) + 1
+            user_data = sheet.row_values(row_index)
+            # Assuming columns: School ID (1), Password (2), Salt (3), Email (4), School Name (5), Logo (6)
+            school_name = user_data[4]
+            logo_base64 = user_data[5]
+            return school_name, logo_base64
+        else:
+            return None, None
+    except Exception as e:
+        st.error(f"Error fetching school details: {str(e)}")
+        return None, None
     
 # Main Page
 if st.session_state['current_page'] == 'main':
+    # Fetch and display school details in the top-right corner
+    # Fetch and display school details in the top-right corner
+    if 'logged_in_user' in st.session_state:
+        school_id = st.session_state['logged_in_user']
+        school_name, logo_base64 = get_school_details(school_id)
+        
+        logo_html = ""
+        if logo_base64:
+            logo_html = f'<img src="data:image/png;base64,{logo_base64}" alt="School Logo" style="height: 60px;" />'
+        
+        name_html = ""
+        if school_name:
+            name_html = f'<span style="font-size: 26px; font-weight: bold; color: #003366;">{school_name}</span>'
+
+        if logo_html or name_html:
+            st.markdown(f"""
+                <style>
+                    .school-details {{
+                        position: absolute;
+                        top: 0;
+                        right: 1rem;
+                        display: flex;
+                        align-items: center;
+                        gap: 12px;
+                        z-index: 1000;
+                    }}
+                </style>
+                <div class="school-details">
+                    {logo_html}
+                    {name_html}
+                </div>
+            """, unsafe_allow_html=True)
+
     st.title("Data Insights Generator")
     st.write("Explore your data and generate insights.")
 
