@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit as st 
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -12,7 +12,6 @@ import base64
 import time
 import os
 import re
-from datetime import datetime
 from io import StringIO
 import hashlib
 import secrets
@@ -20,6 +19,18 @@ from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 import io  # For in-memory file handling
 from urllib.parse import quote_plus
+
+from datetime import datetime, date 
+import matplotlib.pyplot as plt
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.charts.barcharts import VerticalBarChart
+from reportlab.graphics.charts.textlabels import Label
+from reportlab.lib.units import inch
+
 
 
 # Function to connect to Google Sheets
@@ -260,6 +271,9 @@ st.markdown("""
             background-color: #ff6666 !important;
             color: white !important;
             border-radius: 8px;
+
+
+            
         }}
 
         /* Ensure text inside all buttons is white */
@@ -770,20 +784,21 @@ if st.session_state['current_page'] == 'main':
             # Your existing data processing (timestamp removal, preview, etc.)
             timestamp_keywords = ['timestamp', 'date', 'time', 'created', 'submitted', 'record', 'entry', 'logged']
             timestamp_cols = [col for col in df.columns if any(keyword in col.lower() for keyword in timestamp_keywords)]
-            if timestamp_cols:
-                df = df.drop(columns=timestamp_cols)
-                st.write(f"Removed timestamp columns: {', '.join(timestamp_cols)}")
+            # if timestamp_cols:
+            #     df = df.drop(columns=timestamp_cols)
+            #     st.write(f"Removed timestamp columns: {', '.join(timestamp_cols)}")
 
-            st.write(f"File loaded: {selected_file_name if file_source == 'history' else uploaded_file.name}")
-            st.write(f"File size: {content.getbuffer().nbytes} bytes")
-            st.write(f"Number of columns: {df.shape[1]}")
+            # st.write(f"File loaded: {selected_file_name if file_source == 'history' else uploaded_file.name}")
+            # st.write(f"File size: {content.getbuffer().nbytes} bytes")
+            # st.write(f"Number of columns: {df.shape[1]}")
 
             st.write("### Data Preview")
             col1, col2 = st.columns([8, 2])
             with col1:
                 show_preview = st.toggle("Show Table", value=True, key="toggle_preview")
-            if show_preview:
+            if show_preview and "df" in locals():
                 st.dataframe(df.head())
+                st.session_state["preview_table"] = df.head()
 
             st.session_state['df_cleaned'] = df.copy()
 
@@ -799,329 +814,280 @@ if st.session_state['current_page'] == 'main':
         st.error("No data available. Please upload a valid file.")
         st.stop()
     # Detect questionnaire columns dynamically
-    questionnaire_cols = [col for col in df.columns if any(str(val).strip().title() in questionnaire_mapping for val in df[col].dropna())]
 
-    #st.write("### Suggested Actions:")
-    fill_method = True # st.selectbox("Handle missing values", ["None", "Mean", "Median", "Drop"])
-    convert_questionnaire = True #st.checkbox("Convert Questionnaire Responses to Numeric", value=True)
-    
-    #if st.button("Apply Suggested Cleaning"):
-    df_cleaned = df.copy()
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button(" Back to Landing page", use_container_width=True):
+            navigate_to('landing')
+            st.rerun()
+    with col2:
+        if st.button(" Go to Key Metrics", use_container_width=True):
+            navigate_to('metrics')
+            st.rerun()
+    st.stop() 
 
-    # #attempt to translate the column names, unable to get hands on a hinglish set 
+if st.session_state['current_page'] == 'metrics':
+        st.header("Key Metrics (Scale of 5)")
 
-    # # Initialize the Translator
-    # translator = Translator()
+        # --- Ensure df_cleaned is available ---
+        if "df_cleaned" not in st.session_state or st.session_state["df_cleaned"].empty:
+            st.warning("No cleaned data available. Please upload and process a file first.")
+            st.stop()
 
-    # # Create a function to translate column names
-    # def translate_columns(columns):
-    #     translated_column = []
-    #     for text in columns:
-    #       try:
-    #         # Translate each column name from Hinglish/ to English
-    #         translated = translator.translate(col, src='hi', dest='en').text
-    #         translated_column.append(translated.text)
-    #       except Exception as e:
-    #         print(f"Error translating text '{text}': {e}")
-    #         translated_column.append(text) 
-    #     return translated_column
+        df_cleaned = st.session_state["df_cleaned"]
 
-    # # Apply translation to all columns or specific columns
-    # for col in df.columns:
-    #   df_cleaned[col] = translate_columns(df[col])
+        # --- Questionnaire Mapping (convert to numeric) ---
+        questionnaire_cols = [
+            col for col in df_cleaned.columns
+            if any(str(val).strip().title() in questionnaire_mapping for val in df_cleaned[col].dropna())
+        ]
 
-    # print("\nTranslated DataFrame:")
-    # print(df_cleaned)
+        if questionnaire_cols:
+            for col in questionnaire_cols:
+                df_cleaned[col] = df_cleaned[col].astype(str).str.strip().str.title()
+                df_cleaned[col] = df_cleaned[col].map(questionnaire_mapping).fillna(df_cleaned[col])
+                df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors="coerce")
+        else:
+            st.info("No questionnaire columns found to convert.")
+
+        # --- Clean Ethnicity (if column exists) ---
+        ethnicity_column = next((col for col in df_cleaned.columns if "ethnicity" in col.lower()), None)
+        if ethnicity_column:
+            df_cleaned["ethnicity_cleaned"] = df_cleaned[ethnicity_column].replace({
+                v: "General" if "general" in str(v).lower() else
+                "SC" if "sc" in str(v).lower() else
+                "OBC" if "other" in str(v).lower() else
+                "Don't Know" if "do" in str(v).lower() else
+                "ST" if "st" in str(v).lower() else v
+                for v in df_cleaned[ethnicity_column]
+            })
+
+        # --- Define Belonging Constructs ---
+        belonging_questions = {
+            "Safety": ["safe", "surakshit"],
+            "Respect": ["respected", "izzat", "as much respect"],        
+            "Welcome": ["being welcomed", "welcome", "swagat"],
+            "Relationships with Teachers": ["one teacher", "share your problem", "care about your feelings", " care about how I feel", "feel close", "close to your teachers"],
+            "Participation": ["opportunities", "participate", "school activities", "take part", "join in many activities"],        
+            "Acknowledgement": ["notice", "noticed", "listen to you", "dekhein", "acknowledge", "recognized", "listen to what I say", "valued", "heard", "seen", "like you", "like me", "do something well"]
+        }
+
+        # --- Match Constructs to Question Columns ---
+        matched_questions = {
+            cat: [col for col in df_cleaned.columns if any(k.lower() in col.lower() for k in keywords)]
+            for cat, keywords in belonging_questions.items()
+        }
+
+        matched_questions_df = pd.DataFrame.from_dict(matched_questions, orient="index").T.fillna("")
+        st.session_state["matched_questions_table"] = matched_questions_df 
         
-    if convert_questionnaire and questionnaire_cols:
-        for col in questionnaire_cols:
-            df_cleaned[col] = df_cleaned[col].astype(str).str.strip().str.title()
-            df_cleaned[col] = df_cleaned[col].map(questionnaire_mapping).fillna(df_cleaned[col])
-            df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors='coerce')
-    else:
-        st.info("No questionnaire columns found to convert.")
+        # Toggle to show matched questions
+        if st.toggle("Show Questions matched to Constructs", value=False, key="toggle_matched_questions"):
+            st.write("### Matched Questions")
+            st.dataframe(matched_questions_df)
+            
 
-    ethnicity_column = next((col for col in df_cleaned.columns if "ethnicity" in col.lower()), None)
-    if ethnicity_column:
-        df_cleaned["ethnicity_cleaned"] = df_cleaned[ethnicity_column].replace({
-            v: "General" if "general" in str(v).lower() else
-            "SC" if "sc" in str(v).lower() else
-            "OBC" if "other" in str(v).lower() else
-            "Don't Know" if "do" in str(v).lower() else
-            "ST" if "st" in str(v).lower() else v
-            for v in df_cleaned[ethnicity_column]
-        })
-
-    # if fill_method != "None":
-    #     if st.button(f"Approve {fill_method} for missing values?"):
-    #         if fill_method == "Mean" or fill_method == "Median":
-    #             numeric_cols = df_cleaned.select_dtypes(include=['float64', 'int64']).columns
-    #             if numeric_cols.empty:
-    #                 st.warning("No numeric columns available for mean/median imputation.")
-    #             else:
-    #                 if fill_method == "Mean":
-    #                     df_cleaned[numeric_cols] = df_cleaned[numeric_cols].fillna(df_cleaned[numeric_cols].mean())
-    #                 elif fill_method == "Median":
-    #                     df_cleaned[numeric_cols] = df_cleaned[numeric_cols].fillna(df_cleaned[numeric_cols].median())
-    #         elif fill_method == "Drop":
-    #             df_cleaned = df_cleaned.dropna()
-    st.session_state['df_cleaned'] = df_cleaned
-    # st.write("### Data Preview (After Cleaning)")
-    # col1, col2 = st.columns([8, 2])
-    # with col1:
-    #     show_cleaned = st.toggle("Show Cleaned Data", value=True, key="toggle_cleaned")
-    # if show_cleaned:
-    #     st.dataframe(df_cleaned.head())    
-    #st.write(f"Number of question columns used for Insights: {len(questionnaire_cols)}")
-
-    # Insight Delivery
-    df_cleaned = st.session_state.get('df_cleaned', df)
-
-    belonging_questions = {
-        "Safety": ["safe", "surakshit"],
-        "Respect": ["respected", "izzat", "as much respect"],        
-        "Welcome": ["being welcomed", "welcome", "swagat"],
-        "Relationships with Teachers": ["one teacher", "share your problem", "care about your feelings", "close to your teachers"],
-        "Participation": ["opportunities", "participate", "school activities", "take part"],        
-        "Acknowledgement": ["notice", "noticed", "listen to you", "dekhein", "acknowledge", "recognized", "valued", "heard", "seen", "like you"]
-    }
-
-    #  Match each category to actual question columns
-    matched_questions = {
-        cat: [col for col in df_cleaned.columns if any(k.lower() in col.lower() for k in keywords)]
-        for cat, keywords in belonging_questions.items()
-    }
-
-    kaash_col = [col for col in df_cleaned.columns if "kaash" in col.lower()]
-    df_cleaned["KaashScore"] = df_cleaned[kaash_col].apply(pd.to_numeric, errors="coerce").mean(axis=1) if kaash_col else 0
-
-    # Belonging score with error handling
-    belonging_cols = [col for sublist in matched_questions.values() for col in sublist]
-    if belonging_cols:
-        df_cleaned["BelongingRaw"] = df_cleaned[belonging_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1)
-        df_cleaned["BelongingCount"] = df_cleaned[belonging_cols].apply(pd.to_numeric, errors="coerce").notna().sum(axis=1)
-        df_cleaned["BelongingScore"] = df_cleaned.apply(
-            lambda row: (row["BelongingRaw"] - row["KaashScore"]) / row["BelongingCount"] if row["BelongingCount"] > 0 else 0,
-            axis=1
+        # --- Special Handling: "Kaash" Questions ---
+        kaash_col = [col for col in df_cleaned.columns if "kaash" in col.lower()]
+        df_cleaned["KaashScore"] = (
+            df_cleaned[kaash_col].apply(pd.to_numeric, errors="coerce").mean(axis=1) if kaash_col else 0
         )
-    else:
-        df_cleaned["BelongingRaw"] = 0
-        df_cleaned["BelongingCount"] = 0
-        df_cleaned["BelongingScore"] = 0
 
-    category_averages = {
-        cat: df_cleaned[cols].apply(pd.to_numeric, errors='coerce').mean().mean() if cols else 0
-        for cat, cols in matched_questions.items()
-    }
+        # --- Compute Belonging Scores ---
+        belonging_cols = [col for sublist in matched_questions.values() for col in sublist]
+        if belonging_cols:
+            df_cleaned["BelongingRaw"] = df_cleaned[belonging_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+            df_cleaned["BelongingCount"] = df_cleaned[belonging_cols].apply(pd.to_numeric, errors="coerce").notna().sum(axis=1)
+            df_cleaned["BelongingScore"] = df_cleaned.apply(
+                lambda row: (row["BelongingRaw"] - row["KaashScore"]) / row["BelongingCount"] if row["BelongingCount"] > 0 else 0,
+                axis=1
+            )
+        else:
+            df_cleaned["BelongingRaw"] = 0
+            df_cleaned["BelongingCount"] = 0
+            df_cleaned["BelongingScore"] = 0
+            st.info("No survey columns matched the keyword categories to calculate scores.")
 
-    overall_belonging_score = df_cleaned["BelongingScore"].mean() if belonging_cols else None
-    #st.write(overall_belonging_score)
-    if category_averages:
-        highest_area = max(category_averages, key=category_averages.get)
-        # Filter out scores <= 0.00 for lowest score
+        # --- Aggregate Insights ---
+        overall_belonging_score = df_cleaned["BelongingScore"].mean() if belonging_cols else None
+        category_averages = {
+            cat: df_cleaned[cols].apply(pd.to_numeric, errors='coerce').mean().mean() if cols else 0
+            for cat, cols in matched_questions.items()
+        }
+        highest_area = max(category_averages, key=category_averages.get) if category_averages else None
         valid_categories = {k: v for k, v in category_averages.items() if v > 0.00}
         lowest_area = min(valid_categories, key=valid_categories.get) if valid_categories else None
 
-    group_columns = {
-        "Gender": ["gender", "What gender do you use"],
-        "Grade": ["grade", "Which grade are you in"],
-        "Income Status": ["Income Category"],
-        "Health Condition": ["disability", "health condition"],
-        "Ethnicity": ["ethnicity_cleaned"],
-        "Religion": ["religion"]
-    }
+        # --- Save Insights into Session State ---
+        st.session_state['df_cleaned'] = df_cleaned
+        st.session_state['matched_questions'] = matched_questions
+        
+        st.session_state['belonging_questions'] = belonging_questions
+        st.session_state['overall_belonging_score'] = overall_belonging_score
+        st.session_state['category_averages'] = category_averages
+        st.session_state['highest_area'] = highest_area
+        st.session_state['lowest_area'] = lowest_area
 
-    with st.expander("Click here for Insight Dashboard!"):
-        st.header("Insight Dashboard")
-        st.write("### Key Metrics (Scale of 5)")
-        show_dashboard = st.toggle("Show Metrics Board", value=True, key="toggle_dashboard")
-        if show_dashboard:
-            # Ensure df_cleaned is available
-            df_cleaned = st.session_state.get('df_cleaned', pd.DataFrame())
-            
-            # Initialize variables with default values
-            overall_belonging_score = None
-            category_averages = {}
-            highest_area = None
-            lowest_area = None
-            
-            belonging_questions = {
-            "Safety": ["safe", "surakshit"],
-            "Respect": ["respected","respect", "izzat", "as much respect"],        
-            "Welcome": ["being welcomed", "welcome", "swagat"],
-            "Relationships with Teachers": ["one teacher", "share your problem", "care about your feelings", "close to your teachers", "close teacher"],
-            "Participation": ["opportunities", "participate", "school activities", "take part"],        
-            "Acknowledgement": ["notice", "noticed", "listen to you", "dekhein", "acknowledge", "recognized", "valued", "heard", "seen", "like you"]
-            }
-            
+        # Show Likert scale image above the three score cards
+        if scale_base64:
+            st.markdown(
+            f'''
+            <div style="display: flex; justify-content: center; align-items: center;">
+                <img src="data:image/png;base64,{scale_base64}" alt="Likert Scale" style="width:70%; max-width:600px; min-width:300px; height:150px; margin-bottom:18px;"/>
+            </div>
+            ''',
+            unsafe_allow_html=True
+        )
+        # Three-column horizontal layout
+        col1, col2, col3 = st.columns(3)
 
-            # Recalculate matched_questions and related metrics if data is available
-            if df_cleaned.empty:
-                st.warning("No cleaned data available. Please upload and process a file first.")
-            else:
-                matched_questions = {
-                    cat: [col for col in df_cleaned.columns if any(k.lower() in col.lower() for k in keywords)]
-                    for cat, keywords in belonging_questions.items()
-                }
-                # Add toggle for matched questions table
-                show_matched_questions = st.toggle("Show Questions matched to Constructs", value=False, key="toggle_matched_questions")
-                if show_matched_questions:
-                    st.write("### Matched Questions")
-                    # Convert matched_questions to DataFrame with newlines instead of commas
-                    matched_questions_df = pd.DataFrame.from_dict(matched_questions, orient="index").T.fillna("")
-                    matched_questions_df = matched_questions_df.apply(lambda x: "\n".join(x) if x.dtype == "object" and any(isinstance(val, list) for val in x) else x)
-                    st.dataframe(matched_questions_df)
+        if overall_belonging_score is not None and category_averages:
+            with col1:
+                st.markdown(f"""
+                    <div style="background-color:#e6b0aa; border: 4px solid #ff9999; border-radius:10px; padding:1rem; text-align:center;
+                                box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; height: 120px; display: flex; flex-direction: column; justify-content: center;">
+                        <h4> &#9734; Overall Belonging Score</h4>
+                        <h4 style="margin:0;">{overall_belonging_score:.2f}</h4>
+                    </div>
+                """, unsafe_allow_html=True)
 
-                belonging_cols = [col for sublist in matched_questions.values() for col in sublist]
-                
-                if belonging_cols:
-                    df_cleaned["BelongingRaw"] = df_cleaned[belonging_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1)
-                    df_cleaned["BelongingCount"] = df_cleaned[belonging_cols].apply(pd.to_numeric, errors="coerce").notna().sum(axis=1)
-                    df_cleaned["BelongingScore"] = df_cleaned.apply(
-                        lambda row: (row["BelongingRaw"] / row["BelongingCount"]) if row["BelongingCount"] > 0 else 0,
-                        axis=1
-                    )
-                    overall_belonging_score = df_cleaned["BelongingScore"].mean()
-                    
-                    category_averages = {
-                        cat: df_cleaned[cols].apply(pd.to_numeric, errors='coerce').mean().mean() if cols else 0
-                        for cat, cols in matched_questions.items()
-                    }
-                    highest_area = max(category_averages, key=category_averages.get)
-                    # Filter out scores <= 0.00 for lowest score
-                    valid_categories = {k: v for k, v in category_averages.items() if v > 0.00}
-                    lowest_area = min(valid_categories, key=valid_categories.get) if valid_categories else None
+            with col2:
+                st.markdown(f"""
+                    <div style="background-color:#99ccff; border: 4px solid #A7C7E7; border-radius:10px; padding:0.5rem; text-align:center;
+                                box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; height: 120px; display: flex; flex-direction: column; justify-content: center;">
+                        <h4 style="font-size: 1.5rem; margin: 0;"> Highest Score: {highest_area} </h4>
+                        <h2 style="font-size: 1.5rem; margin: 0;">{category_averages[highest_area]:.2f}</h2>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            with col3:
+                if lowest_area is not None:
+                    st.markdown(f"""
+                        <div style="background-color:#FAC898; border: 4px solid #ffcc00; border-radius:10px; padding:0.5rem; text-align:center;
+                                    box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; height: 120px; display: flex; flex-direction: column; justify-content: center;">
+                            <h4 style="font-size: 1.5rem; margin: 0;">Lowest Score: {lowest_area}</h4>
+                            <h2 style="font-size: 1.5rem; margin: 0;">{category_averages[lowest_area]:.2f}</h2>
+                        </div>
+                    """, unsafe_allow_html=True)
                 else:
-                    st.info("No survey columns matched the keyword categories to calculate scores.")
-
-
-            # Show Likert scale image above the three score cards
-            if scale_base64:
-                st.markdown(
-                f'''
-                <div style="display: flex; justify-content: center; align-items: center;">
-                    <img src="data:image/png;base64,{scale_base64}" alt="Likert Scale" style="width:70%; max-width:600px; min-width:300px; height:150px; margin-bottom:18px;"/>
-                </div>
-                ''',
-                unsafe_allow_html=True
-            )
-            # Three-column horizontal layout
-            col1, col2, col3 = st.columns(3)
-
-            if overall_belonging_score is not None and category_averages:
-                with col1:
                     st.markdown(f"""
-                        <div style="background-color:#e6b0aa; border: 4px solid #ff9999; border-radius:10px; padding:1rem; text-align:center;
+                        <div style="background-color:#FAC898; border: 4px solid #ffcc00; border-radius:10px; padding:0.5rem; text-align:center;
                                     box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; height: 120px; display: flex; flex-direction: column; justify-content: center;">
-                            <h4> &#9734; Overall Belonging Score</h4>
-                            <h4 style="margin:0;">{overall_belonging_score:.2f}</h4>
+                            <h4 style="font-size: 1.5rem; margin: 0;">Lowest Score</h4>
+                            <h2 style="font-size: 1.5rem; margin: 0;">N/A</h2>
+                        </div>
+                    """, unsafe_allow_html=True)
+        st.markdown("<hr style='border: 1px dashed black; border-radius: 5px;'>", unsafe_allow_html=True)
+        st.subheader("Category-wise Averages")
+        # Two-column layout
+        left_col, right_col = st.columns([1, 1])
+        
+
+        # Right column: Safety, Respect, and Welcome
+        with left_col:
+            if category_averages:
+                if "Safety" in category_averages:
+                    st.markdown(f"""
+                        <div style="background-color:#DFC5FE; border-radius:10px; padding:1rem; text-align:center;
+                                    box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center;">
+                            <h4 style="font-size: 1rem; margin: 0;">Safety</h4>
+                            <h2 style="font-size: 1.5rem; margin: 0;"">{category_averages['Safety']:.2f}</h2>
+                        </div>
+                    """, unsafe_allow_html=True)
+                if "Respect" in category_averages:
+                    st.markdown(f"""
+                        <div style="background-color:#fdf8b7; border-radius:10px; padding:0.5rem; text-align:center;
+                                    box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center; margin-top: 1rem;">
+                            <h4 style="font-size: 1rem; margin: 0;">Respect</h4>
+                            <h2 style="font-size: 1.5rem; margin: 0;">{category_averages['Respect']:.2f}</h2>
+                        </div>
+                    """, unsafe_allow_html=True)
+                if "Welcome" in category_averages:
+                    st.markdown(f"""
+                        <div style="background-color:#a3d8d3; border-radius:10px; padding:0.5rem; text-align:center;
+                                    box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center; margin-top: 1rem;">
+                            <h4 style="font-size: 1rem; margin: 0;">Welcome</h4>
+                            <h2 style="font-size: 1.5rem; margin: 0;">{category_averages['Welcome']:.2f}</h2>
+                        </div>
+                    """, unsafe_allow_html=True)
+        with right_col:
+            if category_averages:
+                if "Participation" in category_averages:
+                    st.markdown(f"""
+                        <div style="background-color:#DFC5FE; border-radius:10px; padding:1rem; text-align:center;
+                                    box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center;">
+                            <h4 style="font-size: 1rem; margin: 0;">Participation</h4>
+                            <h2 style="font-size: 1.5rem; margin: 0;"">{category_averages['Participation']:.2f}</h2>
+                        </div>
+                    """, unsafe_allow_html=True)
+                if "Acknowledgement" in category_averages:
+                    st.markdown(f"""
+                        <div style="background-color:#fdf8b7; border-radius:10px; padding:0.5rem; text-align:center;
+                                    box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center; margin-top: 1rem;">
+                            <h4 style="font-size: 1rem; margin: 0;">Acknowledgement</h4>
+                            <h2 style="font-size: 1.5rem; margin: 0;">{category_averages['Acknowledgement']:.2f}</h2>
+                        </div>
+                    """, unsafe_allow_html=True)
+                if "Relationships with Teachers" in category_averages:
+                    st.markdown(f"""
+                        <div style="background-color:#a3d8d3; border-radius:10px; padding:0.5rem; text-align:center;
+                                    box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center; margin-top: 1rem;">
+                            <h4 style="font-size: 1rem; margin: 0;">Relationships with Teachers</h4>
+                            <h2 style="font-size: 1.5rem; margin: 0;">{category_averages['Relationships with Teachers']:.2f}</h2>
                         </div>
                     """, unsafe_allow_html=True)
 
-                with col2:
-                    st.markdown(f"""
-                        <div style="background-color:#99ccff; border: 4px solid #A7C7E7; border-radius:10px; padding:0.5rem; text-align:center;
-                                    box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; height: 120px; display: flex; flex-direction: column; justify-content: center;">
-                            <h4 style="font-size: 1.5rem; margin: 0;"> Highest Score: {highest_area} </h4>
-                            <h2 style="font-size: 1.5rem; margin: 0;">{category_averages[highest_area]:.2f}</h2>
-                        </div>
-                    """, unsafe_allow_html=True)
+        
+        st.markdown("<hr style='border: 1px dashed black; border-radius: 5px;'>", unsafe_allow_html=True)
 
-                with col3:
-                    if lowest_area is not None:
-                        st.markdown(f"""
-                            <div style="background-color:#FAC898; border: 4px solid #ffcc00; border-radius:10px; padding:0.5rem; text-align:center;
-                                        box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; height: 120px; display: flex; flex-direction: column; justify-content: center;">
-                                <h4 style="font-size: 1.5rem; margin: 0;">Lowest Score: {lowest_area}</h4>
-                                <h2 style="font-size: 1.5rem; margin: 0;">{category_averages[lowest_area]:.2f}</h2>
-                            </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
-                            <div style="background-color:#FAC898; border: 4px solid #ffcc00; border-radius:10px; padding:0.5rem; text-align:center;
-                                        box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; height: 120px; display: flex; flex-direction: column; justify-content: center;">
-                                <h4 style="font-size: 1.5rem; margin: 0;">Lowest Score</h4>
-                                <h2 style="font-size: 1.5rem; margin: 0;">N/A</h2>
-                            </div>
-                        """, unsafe_allow_html=True)
-            st.markdown("<hr style='border: 1px dashed black; border-radius: 5px;'>", unsafe_allow_html=True)
-            st.subheader("Category-wise Averages")
-            # Two-column layout
-            left_col, right_col = st.columns([1, 1])
-            
+        # if category_averages:
+        #     col1, col2 = st.columns([8, 2])
+        #     with col1:
+        #         show_averages = st.toggle("Show Table", value=False, key="toggle_averages")
+        #     if show_averages:
+        #         st.dataframe(pd.DataFrame.from_dict(category_averages, orient="index", columns=["Average Score"]).round(2))
 
-            # Right column: Safety, Respect, and Welcome
-            with left_col:
-                if category_averages:
-                    if "Safety" in category_averages:
-                        st.markdown(f"""
-                            <div style="background-color:#DFC5FE; border-radius:10px; padding:1rem; text-align:center;
-                                        box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center;">
-                                <h4 style="font-size: 1rem; margin: 0;">Safety</h4>
-                                <h2 style="font-size: 1.5rem; margin: 0;"">{category_averages['Safety']:.2f}</h2>
-                            </div>
-                        """, unsafe_allow_html=True)
-                    if "Respect" in category_averages:
-                        st.markdown(f"""
-                            <div style="background-color:#fdf8b7; border-radius:10px; padding:0.5rem; text-align:center;
-                                        box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center; margin-top: 1rem;">
-                                <h4 style="font-size: 1rem; margin: 0;">Respect</h4>
-                                <h2 style="font-size: 1.5rem; margin: 0;">{category_averages['Respect']:.2f}</h2>
-                            </div>
-                        """, unsafe_allow_html=True)
-                    if "Welcome" in category_averages:
-                        st.markdown(f"""
-                            <div style="background-color:#a3d8d3; border-radius:10px; padding:0.5rem; text-align:center;
-                                        box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center; margin-top: 1rem;">
-                                <h4 style="font-size: 1rem; margin: 0;">Welcome</h4>
-                                <h2 style="font-size: 1.5rem; margin: 0;">{category_averages['Welcome']:.2f}</h2>
-                            </div>
-                        """, unsafe_allow_html=True)
-            with right_col:
-                if category_averages:
-                    if "Participation" in category_averages:
-                        st.markdown(f"""
-                            <div style="background-color:#DFC5FE; border-radius:10px; padding:1rem; text-align:center;
-                                        box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center;">
-                                <h4 style="font-size: 1rem; margin: 0;">Participation</h4>
-                                <h2 style="font-size: 1.5rem; margin: 0;"">{category_averages['Participation']:.2f}</h2>
-                            </div>
-                        """, unsafe_allow_html=True)
-                    if "Acknowledgement" in category_averages:
-                        st.markdown(f"""
-                            <div style="background-color:#fdf8b7; border-radius:10px; padding:0.5rem; text-align:center;
-                                        box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center; margin-top: 1rem;">
-                                <h4 style="font-size: 1rem; margin: 0;">Acknowledgement</h4>
-                                <h2 style="font-size: 1.5rem; margin: 0;">{category_averages['Acknowledgement']:.2f}</h2>
-                            </div>
-                        """, unsafe_allow_html=True)
-                    if "Relationships with Teachers" in category_averages:
-                        st.markdown(f"""
-                            <div style="background-color:#a3d8d3; border-radius:10px; padding:0.5rem; text-align:center;
-                                        box-shadow: 0 2px 5px rgba(0,0,0,0.1); color:black; width: 100%; height: 120px; display: flex; flex-direction: column; justify-content: center; margin-top: 1rem;">
-                                <h4 style="font-size: 1rem; margin: 0;">Relationships with Teachers</h4>
-                                <h2 style="font-size: 1.5rem; margin: 0;">{category_averages['Relationships with Teachers']:.2f}</h2>
-                            </div>
-                        """, unsafe_allow_html=True)
-
-            # if category_averages:
-            #     col1, col2 = st.columns([8, 2])
-            #     with col1:
-            #         show_averages = st.toggle("Show Table", value=False, key="toggle_averages")
-            #     if show_averages:
-            #         st.dataframe(pd.DataFrame.from_dict(category_averages, orient="index", columns=["Average Score"]).round(2))
-
-            if not df_cleaned.empty:
-                summary = df_cleaned.describe()
-                col1, col2 = st.columns([8, 2])
-                with col1:
-                    show_summary = st.toggle("Show Summary Table", value=False, key="toggle_summary")
-                if show_summary:
-                    st.dataframe(summary)
+        # if not df_cleaned.empty:
+        #     summary = df_cleaned.describe()
+        #     col1, col2 = st.columns([8, 2])
+        #     with col1:
+        #         show_summary = st.toggle("Show Summary Table", value=False, key="toggle_summary")
+        #     if show_summary:
+        #         st.dataframe(summary)
+        col1, col2 = st.columns([1, 1])
+        with col1:
+         if st.button("Back to Upload Page", use_container_width=True):
+            navigate_to('main')
+            st.rerun()
+        with col2:
+         if st.button("Go to Visualisations" , use_container_width=True):
+            navigate_to('visualisations')
+            st.rerun()
+        st.stop()            
 
         # Explore and Customize
-    with st.expander("Click here to explore Belonging Across Groups!"):
-        st.subheader("Compare How Different Student Groups Experience Belonging")
+if st.session_state['current_page'] == 'visualisations':
+        st.header("Visualization Tab")
+        # --- Retrieve previously saved values into the same variable names ---
+        df_cleaned = st.session_state.get("df_cleaned", None)
+        matched_questions = st.session_state.get("matched_questions", {})
+        
+        belonging_questions = st.session_state.get("belonging_questions", {})
+        overall_belonging_score = st.session_state.get("overall_belonging_score", None)
+        category_averages = st.session_state.get("category_averages", {})
+        highest_area = st.session_state.get("highest_area", None)
+        lowest_area = st.session_state.get("lowest_area", None)
+
+
+        group_columns = {
+            "Gender": ["gender", "What gender do you use"],
+            "Grade": ["grade", "Which grade are you in"],
+            "Income Status": ["Income Category"],
+            "Health Condition": ["disability", "health condition"],
+            "Ethnicity": ["ethnicity_cleaned"],
+            "Religion": ["religion"]
+        }
+
         show_explore = st.toggle("Show Charts", value=True, key="toggle_explore")
         if show_explore and not df_cleaned.empty:
             def categorize_income(possessions: str) -> str:
@@ -1182,7 +1148,7 @@ if st.session_state['current_page'] == 'main':
                         num_categories = len(value_counts)
                         if num_categories > 3 or any(len(str(cat)) > 8 for cat in value_counts[label]):
                             fig.update_traces(
-                                textposition='outside',
+                                textposition='auto',
                                 textinfo='percent',
                                 textfont=dict(size=15),
                                 marker=dict(line=dict(color='#000000', width=1))
@@ -1336,6 +1302,7 @@ if st.session_state['current_page'] == 'main':
                                 fig.update_traces(
                                     texttemplate='N=%{text}',
                                     textposition='inside',
+                                    width=0.5,
                                     insidetextanchor='middle',
                                     hovertemplate="%{x}<br>Avg Score: %{y:.2f}<br>Students: %{text}<extra></extra>"
                                 )
@@ -1352,7 +1319,7 @@ if st.session_state['current_page'] == 'main':
                                 max_y = group_avg["AvgScore"].max()
                                 fig.update_layout(
                                     margin=dict(t=50),
-                                    yaxis=dict(range=[0, max_y + 0.5])
+                                    yaxis=dict(range=[0, max_y + 0.5]),
                                 )
                                 config = {
                                     'displayModeBar': True,
@@ -1402,12 +1369,14 @@ if st.session_state['current_page'] == 'main':
                         percent_df['Percent'] = (percent_df['Count'] / total_counts * 100).round(1)
                         response_order = ["Agree", "Neutral", "Disagree", "Unknown"]
                         percent_df["ResponseLevel"] = pd.Categorical(percent_df["ResponseLevel"], categories=response_order, ordered=True)
+                        percent_df["text"] = percent_df.apply(lambda row: f"{row['Percent']}% ({row['Count']} students)", axis=1
+)
                         fig = px.bar(
                             percent_df,
                             x=breakdown_col,
-                            y="Percent",
+
                             color="ResponseLevel",
-                            text=percent_df["Percent"].astype(str) + '%',
+                            y=percent_df["Percent"].astype(str) + '%',                            text="text",
                             barmode="stack",
                             title=f"Percentage Breakdown of Responses to '{selected_area}' by Gender",
                             color_discrete_map={
@@ -1421,7 +1390,7 @@ if st.session_state['current_page'] == 'main':
                         fig.update_layout(
                             yaxis_title="Percentage (%)",
                             xaxis_title=breakdown_col,
-                            bargap=0.5,
+                            bargap=0.2,
                             legend_title="Response Level",
                             uniformtext_minsize=8,
                             uniformtext_mode='hide'
@@ -1452,83 +1421,275 @@ if st.session_state['current_page'] == 'main':
 
 
                         st.plotly_chart(fig, use_container_width=True, config=config)
+        
+        col1, col2 = st.columns([1, 1])
 
-            # Take Action
-            school_name = st.text_input("Enter your School Name", value="ABC High School", key="school_input")
-            generate_pdf = st.button("Generate Report", key="generate_report_button")
+        with col1:
+            if st.button("Back to Key Metrics", use_container_width=True):
+                navigate_to('metrics')
+                st.rerun()
 
-            logo_path = "images/project_apnapan_logo.png"
-            logo_exists = os.path.exists(logo_path)
+        with col2:
+            if st.button("Go to Data Tables", use_container_width=True):
+                navigate_to('data_table')
+                st.rerun()
+        st.stop()
 
-            class ProStyledPDF(FPDF):
-                def header(self):
-                    if logo_exists:
-                        self.image(logo_path, x=10, y=10, w=20)
-                    self.set_font("Arial", "B", 18)
-                    self.set_text_color(0, 51, 102)  # Navy Blue
-                    self.cell(0, 10, school_name, ln=True, align="C")
-                    self.set_font("Arial", "", 13)
-                    self.cell(0, 10, "Data Insights Snapshot", ln=True, align="C")
-                    self.ln(8)
 
-                def footer(self):
-                    self.set_y(-20)
-                    self.set_font("Arial", "I", 10)
-                    self.set_text_color(100)
-                    self.cell(0, 10, "Generated using the Project Apnapan Data Insights Tool", 0, 1, "C")
-                    self.cell(0, 10, datetime.today().strftime("%B %d, %Y"), 0, 0, "C")
 
-                def metric_card(self, label, value, color_rgb):
-                    self.set_fill_color(*color_rgb)
-                    self.set_text_color(255, 255, 255)
-                    self.set_font("Arial", "B", 12)
-                    self.cell(0, 12, f"{label}: {value:.2f}", ln=1, align="C", fill=True)
-                    self.ln(2)
 
-                def intro_section(self):
-                    self.set_font("Arial", "", 12)
-                    self.set_text_color(0)
-                    self.multi_cell(0, 8, f"This report presents a snapshot of how students experience Belonging, "
-                                        f"Safety, Respect, and Welcome at {school_name}. The results are based on "
-                                        f"student-reported data collected from the survey file.")
-                    self.ln(8)
+if st.session_state['current_page'] == 'data_table':
+    st.header(" Data Tables")
 
-            if generate_pdf and school_name.strip():
-                if overall_belonging_score is None or not category_averages:
-                    st.error("Cannot generate PDF: No valid data available. Please upload a file and process it.")
-                else:
-                    pdf = ProStyledPDF()
-                    pdf.add_page()
-                    pdf.intro_section()
-                    pdf.metric_card("Overall Belonging Score", overall_belonging_score or 0, (0, 102, 204))  # Blue
-                    pdf.metric_card("Safety", category_averages.get("Safety", 0), (0, 153, 0))               # Green
-                    pdf.metric_card("Respect", category_averages.get("Respect", 0), (255, 153, 51))          # Orange
-                    pdf.metric_card("Welcomed", category_averages.get("Welcome", 0), (204, 0, 102))          # Pink
-                    clean_name = re.sub(r'[^\w\s-]', '', school_name).strip().replace(' ', '_')
-                    safe_filename = f"{clean_name}_insights_report.pdf"
-                    pdf_output = pdf.output(dest='S').encode('latin-1')
-                    st.download_button(
-                        label="Downloading Report",
-                        data=pdf_output,
-                        file_name=safe_filename,
-                        mime="application/pdf"
-                    )
+    # ---- pull from session_state (no hardcoded numbers) ----
+    df_cleaned          = st.session_state.get("df_cleaned", None)
+    matched_questions   = st.session_state.get("matched_questions", {})
+    category_averages   = st.session_state.get("category_averages", {})
+    overall_belonging   = st.session_state.get("overall_belonging_score", None)
+    highest_area        = st.session_state.get("highest_area", None)
+    lowest_area         = st.session_state.get("lowest_area", None)
 
-        # Feedback Loop
-        def send_feedback_to_google_sheet(feedback_text):
-            try:
-                sheet = connect_to_google_sheet("Apnapan Data Insights Generator Tool Feedbacks")
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                sheet.append_row([timestamp, feedback_text])
-                print(f"Feedback submitted: {timestamp}, {feedback_text}")
-                return True
-            except Exception as e:
-                print(f"Error: {e}")
-                st.error(f"Failed to send feedback: {e}")
-                return False
+    # Safe fallbacks
+    school_name = st.session_state.get("school_name", "Your School")
+    date_today  = date.today().strftime("%d %B, %Y")
+    n_students  = int(df_cleaned.shape[0]) if isinstance(df_cleaned, pd.DataFrame) else 0
 
-        # Feedback Section
-    with st.expander("Feedback"):
+    # ---- Tables (as you had) ----
+    st.write("### Data Preview")
+    if "preview_table" in st.session_state:
+        st.dataframe(st.session_state["preview_table"])
+    else:
+        st.info("No preview table saved yet.")
+
+    st.write("### Matched Questions")
+    if "matched_questions_table" in st.session_state:
+        st.dataframe(st.session_state["matched_questions_table"])
+    else:
+        # build once if not saved
+        if isinstance(matched_questions, dict) and matched_questions:
+            mq_df = pd.DataFrame.from_dict(matched_questions, orient="index").T.fillna("")
+            st.session_state["matched_questions_table"] = mq_df
+            st.dataframe(mq_df)
+        else:
+            st.info("No matched questions available.")
+
+    st.write("### Category Averages")
+    if category_averages:
+        averages_df = pd.DataFrame.from_dict(category_averages, orient="index", columns=["Average Score"]).round(2)
+        st.dataframe(averages_df)
+        st.session_state["category_averages_table"] = averages_df
+    else:
+        st.info("No category averages available.")
+
+    if isinstance(df_cleaned, pd.DataFrame) and not df_cleaned.empty:
+        summary = df_cleaned.describe()
+        st.write("### Summary Table ")
+        st.dataframe(summary)
+        st.session_state["summary_table"] = summary
+    else:
+        st.info("No cleaned data available.")
+
+    # ========= PDF GENERATION =========
+    # helpers to draw pies with matplotlib and return BytesIO for ReportLab
+    def pie_image_from_series(series, title):
+        """
+        series: pandas.Series of counts (value_counts)
+        returns: BytesIO PNG
+        """
+        buf = io.BytesIO()
+        labels = series.index.astype(str).tolist()
+        sizes  = series.values.tolist()
+        if len(sizes) == 0:
+            return None
+
+        fig, ax = plt.subplots(figsize=(3, 3), dpi=200)
+        ax.pie(sizes, labels=labels, autopct=lambda p: f"{p:.1f}%", startangle=140)
+        ax.axis('equal')
+        ax.set_title(title)
+        plt.tight_layout()
+        fig.savefig(buf, format="png", bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    # Build demographic pies (only if columns exist)
+    gender_pie_buf = None
+    religion_pie_buf = None
+    if isinstance(df_cleaned, pd.DataFrame) and not df_cleaned.empty:
+        # Try to find likely columns
+        gender_col = next((c for c in df_cleaned.columns if "gender" in c.lower()), None)
+        religion_col = next((c for c in df_cleaned.columns if "relig" in c.lower()), None)
+
+        if gender_col:
+            gender_counts = df_cleaned[gender_col].astype(str).replace({"nan": "Unknown"}).value_counts(dropna=False)
+            gender_pie_buf = pie_image_from_series(gender_counts, "Gender Distribution")
+
+        if religion_col:
+            religion_counts = df_cleaned[religion_col].astype(str).replace({"nan": "Unknown"}).value_counts(dropna=False)
+            religion_pie_buf = pie_image_from_series(religion_counts, "Religion Distribution")
+
+    # Build constructs list table (right-rail look)
+    constructs_table_data = [["Construct", "Avg (1–5)"]]
+    if category_averages:
+        for k, v in category_averages.items():
+            constructs_table_data.append([k, f"{float(v):.2f}"])
+    else:
+        constructs_table_data.append(["-", "-"])
+
+    # bubble styles in reportlab via 1x1 tables with background colors
+    def bubble(text, bg_hex):
+        return Table([[Paragraph(text, ParagraphStyle("bub", fontSize=12, alignment=1, textColor=colors.white))]],
+                     colWidths=[2.2*inch], rowHeights=[0.9*inch],
+                     style=TableStyle([
+                         ("BACKGROUND", (0,0), (-1,-1), colors.HexColor(bg_hex)),
+                         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                         ("ALIGN", (0,0), (-1,-1), "CENTER"),
+                         ("BOX", (0,0), (-1,-1), 0, colors.white),
+                         ("INNERGRID", (0,0), (-1,-1), 0, colors.white),
+                     ]))
+
+    def generate_pdf():
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=28, rightMargin=28, topMargin=28, bottomMargin=28)
+        styles = getSampleStyleSheet()
+
+        # Custom styles
+        title_style   = ParagraphStyle("TitleStyle", parent=styles["Title"], fontSize=20, alignment=1, textColor=colors.black)
+        small_grey    = ParagraphStyle("SmallGrey", parent=styles["Normal"], fontSize=9, alignment=2, textColor=colors.HexColor("#666"))
+        header_style  = ParagraphStyle("HeaderStyle", parent=styles["Heading2"], fontSize=14, textColor=colors.HexColor("#000"))
+        note_style    = ParagraphStyle("NoteStyle", parent=styles["Normal"], fontSize=10)
+
+        story = []
+
+        # Header: title centered, date+school on right
+        story.append(Paragraph("Apnapan Pulse Report", title_style))
+        story.append(Spacer(1, 2))
+        story.append(Paragraph(f"Date: {date_today} &nbsp;&nbsp;&nbsp;&nbsp; Name: {school_name}", small_grey))
+        story.append(Spacer(1, 12))
+
+        # Row of two big bubbles: Belonging score + N students
+        score_txt = f"<b>Belonging score</b><br/><font size=18>{(overall_belonging if overall_belonging is not None else 0):.2f}</font>"
+        n_txt     = f"<b>Number of students (N)</b><br/><font size=18>{n_students}</font>"
+        row1 = Table([[bubble(score_txt, "#E59A86"), bubble(n_txt, "#A7E181")]],
+                     colWidths=[3.1*inch, 3.1*inch])
+        story.append(row1)
+        story.append(Spacer(1, 10))
+
+        # Strongest / Weakest bubbles
+        strong_label = (highest_area if isinstance(highest_area, str) else "-")
+        strong_val   = float(category_averages.get(strong_label, 0)) if strong_label in category_averages else 0.0
+        weak_label   = (lowest_area if isinstance(lowest_area, str) else "-")
+        weak_val     = float(category_averages.get(weak_label, 0)) if weak_label in category_averages else 0.0
+
+        strong_txt = f"<b>Strongest area:</b><br/>{strong_label}<br/><font size=13>{strong_val:.2f}</font>"
+        weak_txt   = f"<b>Weakest area:</b><br/>{weak_label}<br/><font size=13>{weak_val:.2f}</font>"
+        row2 = Table([[bubble(strong_txt, "#7FB3FF"), bubble(weak_txt, "#FFD29B")]],
+                     colWidths=[3.1*inch, 3.1*inch])
+        story.append(row2)
+        story.append(Spacer(1, 14))
+
+        # Section: Demographics + Right rail constructs
+        left_cells = []
+        # Add pies if available
+        pie_elems = []
+        if gender_pie_buf:
+            pie_elems.append(Image(gender_pie_buf, width=2.7*inch, height=2.7*inch))
+        if religion_pie_buf:
+            pie_elems.append(Image(religion_pie_buf, width=2.7*inch, height=2.7*inch))
+        if pie_elems:
+            left_cells.extend(pie_elems)
+        else:
+            left_cells.append(Paragraph("Demographics charts will appear here when available.", note_style))
+
+        left_flow = []
+        for elem in left_cells:
+            left_flow.append(elem)
+            left_flow.append(Spacer(1, 10))
+
+        constructs_tbl = Table(constructs_table_data, colWidths=[2.2*inch, 1.0*inch])
+        constructs_tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#F0F0F0")),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#AAAAAA")),
+            ("ALIGN", (1,1), (1,-1), "CENTER"),
+        ]))
+        right_panel = []
+        right_panel.append(Paragraph("Construct Scores", header_style))
+        right_panel.append(Spacer(1, 6))
+        right_panel.append(constructs_tbl)
+
+        # Two-column layout: left (pies) | right (constructs list)
+        layout = Table([[left_flow, right_panel]], colWidths=[3.9*inch, 2.3*inch])
+        layout.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "TOP")]))
+        story.append(layout)
+        story.append(Spacer(1, 16))
+
+        # Food for Thought
+        story.append(Paragraph("Food for Thought", header_style))
+        bullets = """
+        <ul>
+            <li>Do certain groups consistently score higher or lower?</li>
+            <li>Why do you think that happens?</li>
+            <li>What kind of experiences or challenges could be influencing their responses?</li>
+            <li>Are there social, cultural, or school-related factors that might be shaping these patterns?</li>
+        </ul>
+        """
+        story.append(Paragraph(bullets, styles['Normal']))
+
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
+
+    pdf_buffer = generate_pdf()
+
+    # ---- Top row buttons: Back + Feedback side-by-side ----
+    colA, colB, colC = st.columns([1, 1, 1])
+    with colA:
+        if st.button(" Back to Visualisations", use_container_width=True):
+            navigate_to('visualisations')
+            st.rerun()
+    with colB:
+        # clicking sets a flag that opens the expander automatically below
+        if st.button("Feedback", use_container_width=True):
+            st.session_state["open_feedback"] = True
+
+    # ---- Styled download button (peach) ----
+    st.markdown("""
+        <style>
+        .stDownloadButton > button {
+            background-color: #C7361A !important;
+            color: #000 !important;
+            border-radius: 10px;
+            border: none;
+            font-weight: 700;
+        }
+        .stDownloadButton > button:hover {
+            background-color: #FFB774 !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    with colC:
+        st.download_button(
+            label=" Generate Report",
+            data=pdf_buffer,
+            use_container_width=True,
+            file_name="Apnapan_Pulse_Report.pdf",
+            mime="application/pdf"
+        )
+
+    # ---- Feedback section (opens if button pressed) ----
+    def send_feedback_to_google_sheet(feedback_text):
+        try:
+            sheet = connect_to_google_sheet("Apnapan Data Insights Generator Tool Feedbacks")
+            timestamp = date.now().strftime("%Y-%m-%d %H:%M:%S")
+            sheet.append_row([timestamp, feedback_text])
+            return True
+        except Exception as e:
+            st.error(f"Failed to send feedback: {e}")
+            return False
+
+    default_expanded = st.session_state.pop("open_feedback", False)
+    with st.expander("Feedback", expanded=default_expanded):
         feedback = st.text_area("Flag any issues or suggestions")
         if st.button("Submit Feedback"):
             if feedback:
@@ -1541,3 +1702,5 @@ if st.session_state['current_page'] == 'main':
 
     with st.expander("Need Help?"):
         st.write("Contact us at: Phone: +91 1234567890")
+
+    st.stop()            
