@@ -581,11 +581,6 @@ st.markdown(f"""
         .stMultiSelect > div, .css-16idsys, .css-1r6slb0, .css-1n76uvr {{
             color: black !important;
         }}
-    </style>
-    <div class="custom-logo">
-        <img src="data:image/png;base64,{logo_base64}" alt="Project Apnapan Logo" />
-        <span>Project Apnapan</span>
-    </div>
 """, unsafe_allow_html=True)
 
 # Sample dataset for preview (move this up!)
@@ -607,8 +602,59 @@ sample_data = pd.DataFrame({
 })
 
 
+def get_school_details(school_id):
+    try:
+        sheet = connect_to_google_sheet("Apnapan User Accounts")
+        all_school_ids = sheet.col_values(1)
+        if school_id in all_school_ids:
+            row_index = all_school_ids.index(school_id) + 1
+            user_data = sheet.row_values(row_index)
+            # Assuming columns: School ID (1), Password (2), Salt (3), Email (4), School Name (5), Logo (6)
+            school_name = user_data[4]
+            logo_base64 = user_data[5]
+            return school_name, logo_base64
+        else:
+            return None, None
+    except Exception as e:
+        st.error(f"Error fetching school details: {str(e)}")
+        return None, None
+
 # Landing Page
 if st.session_state['current_page'] == 'landing':
+    # Header with Project Apnapan logo and school details on the same line
+    col1, col2 = st.columns([4, 4])  # Adjust column widths for alignment
+
+    with col1:
+        # Project Apnapan logo and name
+        st.markdown(f"""
+            <div class="custom-logo">
+                <img src="data:image/png;base64,{logo_base64}" alt="Project Apnapan Logo" />
+                <span>Project Apnapan</span>
+            </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        # School logo and name
+        if 'logged_in_user' in st.session_state:
+            school_id = st.session_state['logged_in_user']
+            school_name, school_logo_base64 = get_school_details(school_id)
+
+            school_logo_html = ""
+            if school_logo_base64:
+                school_logo_html = f'<img src="data:image/png;base64,{school_logo_base64}" alt="School Logo" style="height: 50px;" />'
+
+            school_name_html = ""
+            if school_name:
+                school_name_html = f'<h4 style="margin: 0; color: #003366 !important;">{school_name}</h4>'
+
+            if school_logo_html or school_name_html:
+                st.markdown(f"""
+                    <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding-top: 10px;">
+                        {school_logo_html}
+                        {school_name_html}
+                    </div>
+                """, unsafe_allow_html=True)
+
     st.title("Welcome to the Data Insights Generator!")
     st.write("Your journey to understanding students’ experiences begins here.")
     st.write("This easy-to-use tool is designed to help schools uncover meaningful insights about student belonging and well-being. Let’s get started!")
@@ -727,34 +773,46 @@ def get_school_details(school_id):
     
 # Main Page
 if st.session_state['current_page'] == 'main':
-    # Header with title on left, school info on right
-    col1, col2 = st.columns([3, 1])
+    # Header with Project Apnapan logo and school details on the same line
+    col1, col2 = st.columns([4, 4])  # Adjust column widths for alignment
+
+    with col1:
+        # Project Apnapan logo and name
+        st.markdown(f"""
+            <div class="custom-logo">
+                <img src="data:image/png;base64,{logo_base64}" alt="Project Apnapan Logo" />
+                <span>Project Apnapan</span>
+            </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        # School logo and name
+        if 'logged_in_user' in st.session_state:
+            school_id = st.session_state['logged_in_user']
+            school_name, school_logo_base64 = get_school_details(school_id)
+
+            school_logo_html = ""
+            if school_logo_base64:
+                school_logo_html = f'<img src="data:image/png;base64,{school_logo_base64}" alt="School Logo" style="height: 50px;" />'
+
+            school_name_html = ""
+            if school_name:
+                school_name_html = f'<h4 style="margin: 0; color: #003366 !important;">{school_name}</h4>'
+
+            if school_logo_html or school_name_html:
+                st.markdown(f"""
+                    <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding-top: 10px;">
+                        {school_logo_html}
+                        {school_name_html}
+                    </div>
+                """, unsafe_allow_html=True)
+
+    # Main content starts here
+    col1, col2 = st.columns([3, 1])  # Adjust layout for title and other content
 
     with col1:
         st.title("Data Insights Generator")
         st.write("Explore your data and generate insights.")
-
-    # Fetch and display school details in the right column
-    with col2:
-        if 'logged_in_user' in st.session_state:
-            school_id = st.session_state['logged_in_user']
-            school_name, logo_base64 = get_school_details(school_id)
-            
-            logo_html = ""
-            if logo_base64:
-                logo_html = f'<img src="data:image/png;base64,{logo_base64}" alt="School Logo" style="height: 50px;" />'
-            
-            name_html = ""
-            if school_name:
-                name_html = f'<h4 style="margin: 0; color: #003366 !important;">{school_name}</h4>'
-
-            if logo_html or name_html:
-                st.markdown(f"""
-                    <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding-top: 10px;">
-                        {logo_html}
-                        {name_html}
-                    </div>
-                """, unsafe_allow_html=True)
 
     df = None  # Initialize df
     file_source = None  # Track if from upload or history
@@ -1753,4 +1811,4 @@ if st.session_state['current_page'] == 'data_table':
     with st.expander("Need Help?"):
         st.write("Contact us at: Phone: +91 1234567890")
 
-    st.stop()            
+    st.stop()
