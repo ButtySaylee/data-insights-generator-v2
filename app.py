@@ -1615,6 +1615,10 @@ if st.session_state['current_page'] == 'visualisations':
 if st.session_state['current_page'] == 'data_table':
     st.header(" Data Tables")
 
+    # Initialize state for PDF generation to prevent re-generation on every interaction
+    if 'pdf_buffer' not in st.session_state:
+        st.session_state.pdf_buffer = None
+
     # ---- pull from session_state (no hardcoded numbers) ----
     df_cleaned          = st.session_state.get("df_cleaned", None)
     matched_questions   = st.session_state.get("matched_questions", {})
@@ -1623,8 +1627,17 @@ if st.session_state['current_page'] == 'data_table':
     highest_area        = st.session_state.get("highest_area", None)
     lowest_area         = st.session_state.get("lowest_area", None)
 
-    # Safe fallbacks
-    school_name = st.session_state.get("school_name", "Your School")
+    # ---- Fetch school details for the report ----
+    school_name = "Your School" # Default
+    school_logo_base64 = None
+    if 'logged_in_user' in st.session_state:
+        school_id = st.session_state['logged_in_user']
+        name, logo = get_school_details(school_id)
+        if name:
+            school_name = name
+        if logo:
+            school_logo_base64 = logo
+
     date_today  = date.today().strftime("%d %B, %Y")
     n_students  = int(df_cleaned.shape[0]) if isinstance(df_cleaned, pd.DataFrame) else 0
 
@@ -1722,23 +1735,51 @@ if st.session_state['current_page'] == 'data_table':
                          ("INNERGRID", (0,0), (-1,-1), 0, colors.white),
                      ]))
 
-    def generate_pdf():
+    def generate_pdf(school_name, school_logo_base64, apnapan_logo_base64):
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=28, rightMargin=28, topMargin=28, bottomMargin=28)
         styles = getSampleStyleSheet()
 
         # Custom styles
-        title_style   = ParagraphStyle("TitleStyle", parent=styles["Title"], fontSize=20, alignment=1, textColor=colors.black)
+        title_style   = ParagraphStyle("TitleStyle", parent=styles["Title"], fontSize=18, alignment=1, textColor=colors.black, spaceAfter=6)
         small_grey    = ParagraphStyle("SmallGrey", parent=styles["Normal"], fontSize=9, alignment=2, textColor=colors.HexColor("#666"))
-        header_style  = ParagraphStyle("HeaderStyle", parent=styles["Heading2"], fontSize=14, textColor=colors.HexColor("#000"))
+        header_style  = ParagraphStyle("HeaderStyle", parent=styles["Heading2"], fontSize=14, alignment=1, textColor=colors.HexColor("#000"))
         note_style    = ParagraphStyle("NoteStyle", parent=styles["Normal"], fontSize=10)
 
         story = []
 
-        # Header: title centered, date+school on right
-        story.append(Paragraph("Apnapan Pulse Report", title_style))
-        story.append(Spacer(1, 2))
-        story.append(Paragraph(f"Date: {date_today} &nbsp;&nbsp;&nbsp;&nbsp; Name: {school_name}", small_grey))
+        # --- PDF Header with Logos and Names ---
+        apnapan_logo_img = Paragraph(" ", styles['Normal']) # Fallback
+        if apnapan_logo_base64:
+            try:
+                apnapan_logo_bytes = io.BytesIO(base64.b64decode(apnapan_logo_base64))
+                apnapan_logo_img = Image(apnapan_logo_bytes, width=0.8*inch, height=0.8*inch)
+            except Exception:
+                pass # Keep fallback
+
+        school_logo_img = Paragraph(" ", styles['Normal']) # Fallback
+        if school_logo_base64:
+            try:
+                school_logo_bytes = io.BytesIO(base64.b64decode(school_logo_base64))
+                school_logo_img = Image(school_logo_bytes, width=0.8*inch, height=0.8*inch)
+            except Exception:
+                pass # Keep fallback
+
+        # Center content: Report Title and School Name
+        center_content = [
+            Paragraph("Apnapan Pulse Report", title_style),
+            Paragraph(school_name, header_style)
+        ]
+
+        header_table = Table([[apnapan_logo_img, center_content, school_logo_img]], colWidths=[1*inch, 5.5*inch, 1*inch])
+        header_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+            ('ALIGN', (1, 0), (1, 0), 'CENTER'),
+            ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
+        ]))
+        story.append(header_table)
+        story.append(Paragraph(f"Date: {date_today}", small_grey))
         story.append(Spacer(1, 12))
 
         # Row of two big bubbles: Belonging score + N students
@@ -1813,12 +1854,11 @@ if st.session_state['current_page'] == 'data_table':
         buffer.seek(0)
         return buffer
 
-    pdf_buffer = generate_pdf()
-
     # ---- Top row buttons: Back + Feedback side-by-side ----
     colA, colB, colC = st.columns([1, 1, 1])
     with colA:
         if st.button(" Back to Visualisations", use_container_width=True):
+            st.session_state.pdf_buffer = None # Clear buffer when navigating away
             navigate_to('visualisations')
             st.rerun()
     with colB:
@@ -1843,15 +1883,22 @@ if st.session_state['current_page'] == 'data_table':
     """, unsafe_allow_html=True)
 
     with colC:
-        st.markdown('<div class="report-download-button">', unsafe_allow_html=True)
-        st.download_button(
-            label=" Generate Report",
-            data=pdf_buffer,
-            use_container_width=True,
-            file_name="Apnapan_Pulse_Report.pdf",
-            mime="application/pdf"
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
+        # The "Generate" button is the primary action. It creates the PDF and stores it in state.
+        if st.button("Generate Report", use_container_width=True, key="generate_report"):
+            with st.spinner("Generating your report..."):
+                st.session_state.pdf_buffer = generate_pdf(school_name, school_logo_base64, logo_base64)
+
+        # If a report has been generated, show the download button.
+        if st.session_state.get('pdf_buffer'):
+            st.markdown('<div class="report-download-button">', unsafe_allow_html=True)
+            st.download_button(
+                label="Download Report",
+                data=st.session_state.pdf_buffer,
+                use_container_width=True,
+                file_name="Apnapan_Pulse_Report.pdf",
+                mime="application/pdf"
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
 
     # ---- Feedback section (opens if button pressed) ----
     def send_feedback_to_google_sheet(feedback_text):
