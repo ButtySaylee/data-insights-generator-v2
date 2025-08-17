@@ -211,7 +211,26 @@ def upload_file_to_mongo(school_id, uploaded_file):
 def list_user_files(school_id):
     collection = get_mongo_collection()
     try:
-        files = list(collection.find({"school_id": school_id}, {"_id": 0, "filename": 1, "timestamp": 1}).sort("timestamp", -1))
+        # Use an aggregation pipeline to get the latest version of each unique filename
+        pipeline = [
+            {"$match": {"school_id": school_id}},  # Filter by school
+            {"$sort": {"timestamp": -1}},  # Sort by date, newest first
+            {
+                "$group": {  # Group by filename
+                    "_id": "$filename",
+                    "latest_timestamp": {"$first": "$timestamp"}  # Get the newest timestamp
+                }
+            },
+            {
+                "$project": {  # Reshape the output
+                    "_id": 0,
+                    "filename": "$_id",
+                    "timestamp": "$latest_timestamp"
+                }
+            },
+            {"$sort": {"timestamp": -1}}  # Sort the final list by date
+        ]
+        files = list(collection.aggregate(pipeline))
         return files  # List of dicts: [{'filename': 'file.csv', 'timestamp': datetime}]
     except PyMongoError as e:
         st.error(f"Error listing files: {e}")
