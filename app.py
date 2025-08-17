@@ -32,6 +32,12 @@ from reportlab.graphics.charts.textlabels import Label
 from reportlab.lib.units import inch
 
 
+# Function to load and process data
+@st.cache_data
+def load_and_process_data(file):
+    df = pd.read_csv(file)
+    df = df.drop(columns=["unnecessary_column"])
+    return df
 
 # Function to connect to Google Sheets
 def connect_to_google_sheet(sheet_name):
@@ -151,6 +157,20 @@ def update_user_password(school_id, new_password):
         return False, f"An error occurred while updating password: {str(e)}"
     
 
+# Function to get MIME type for file download
+def get_mime_type(filename):
+    """Returns the MIME type based on the file extension."""
+    ext = filename.split('.')[-1].lower()
+    if ext == 'csv':
+        return 'text/csv'
+    elif ext == 'xlsx':
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    elif ext == 'xls':
+        return 'application/vnd.ms-excel'
+    elif ext == 'txt':
+        return 'text/plain'
+    return 'application/octet-stream'  # Generic fallback
+
 # Function to connect to MongoDB collection
 @st.cache_resource  # Cache for efficiency
 def get_mongo_collection():
@@ -268,7 +288,7 @@ st.markdown("""
             font-weight: bold;
             margin-left: 8px;
         }
-        .stTextInput label {
+        .stTextInput label, .stFileUploader label {
             color: black !important;
         }
 
@@ -281,9 +301,23 @@ st.markdown("""
             
         }}
 
+        /* Style for the history download button to match other buttons */
+        .history-download-button .stDownloadButton button {
+            background-color: #ff6666 !important; /* Match other buttons */
+            color: white !important;
+            font-weight: bold !important;
+            border: 1px solid #e05252 !important; /* Darker red border for consistency */
+            width: 100%; /* Make it full width to match other elements */
+        }
+        .history-download-button .stDownloadButton button:hover {
+            background-color: #e05252 !important; /* Darker red on hover */
+            border-color: #c44141 !important;
+        }
+
         /* Ensure text inside all buttons is white */
         div[data-testid="stForm"] button p,
-        div[data-testid="stButton"] > button p {
+        div[data-testid="stButton"] > button p,
+        div[data-testid="stDownloadButton"] button p {
             color: white !important;
         }
 
@@ -854,8 +888,21 @@ if st.session_state['current_page'] == 'main':
                 downloaded_file = download_file_from_mongo(school_id, selected_file_name)
                 if downloaded_file:
                     file_source = "history"
-                    file_type = selected_file_name.split('.')[-1].lower()
                     st.success(f"Loaded {selected_file_name} from history.")
+
+                    # Read the file content into bytes for the download button
+                    # and then rewind the stream for pandas to process it later.
+                    file_bytes = downloaded_file.read()
+                    downloaded_file.seek(0)
+
+                    st.markdown('<div class="history-download-button">', unsafe_allow_html=True)
+                    st.download_button(
+                        label=f"Download {selected_file_name}",
+                        data=file_bytes,
+                        file_name=selected_file_name,
+                        mime=get_mime_type(selected_file_name)
+                    )
+                    st.markdown('</div>', unsafe_allow_html=True)
         else:
             st.info("No previous files found in your history.")
     
@@ -1763,20 +1810,21 @@ if st.session_state['current_page'] == 'data_table':
     # ---- Styled download button (peach) ----
     st.markdown("""
         <style>
-        .stDownloadButton > button {
+        .report-download-button .stDownloadButton > button {
             background-color: #C7361A !important;
-            color: #000 !important;
+            color: white !important;
             border-radius: 10px;
             border: none;
             font-weight: 700;
         }
-        .stDownloadButton > button:hover {
+        .report-download-button .stDownloadButton > button:hover {
             background-color: #FFB774 !important;
         }
         </style>
     """, unsafe_allow_html=True)
 
     with colC:
+        st.markdown('<div class="report-download-button">', unsafe_allow_html=True)
         st.download_button(
             label=" Generate Report",
             data=pdf_buffer,
@@ -1784,6 +1832,7 @@ if st.session_state['current_page'] == 'data_table':
             file_name="Apnapan_Pulse_Report.pdf",
             mime="application/pdf"
         )
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # ---- Feedback section (opens if button pressed) ----
     def send_feedback_to_google_sheet(feedback_text):
