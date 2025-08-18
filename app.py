@@ -1,4 +1,4 @@
-import streamlit as st 
+import streamlit as st # test 
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -852,10 +852,10 @@ if st.session_state['current_page'] == 'landing':
         <div style="margin-bottom: 10px;">
             <span style="font-size:1.25rem; font-weight:700; color:#003366;">Step-2:</span>
             <span style="font-weight:600;"> 
-                Explore the Insight Dashboard</span>
+                Explore the Key metrics</span>
                 <br>
-                <span>Click on the </span><span style="color:#003366; font-weight:bold; background:#e6b0aa; padding:2px 6px; border-radius:4px;">Insight Dashboard</span>
-                <span>to instantly view key trends, metrics, and patterns in your data.
+                <span>Click on the </span><span style="color:#003366; font-weight:bold; background:#e6b0aa; padding:2px 6px; border-radius:4px;"> Go to Key Metrics </span>
+                <span>to instantly view key trends and  metrics in your data.
             </span>
         </div>
         <div style="margin-bottom: 10px;">
@@ -863,17 +863,26 @@ if st.session_state['current_page'] == 'landing':
             <span style="font-weight:600;">
                 Discover Group-Level Insights</span>
                 <br>
-                <span>Head to the</span> <span style="color:#003366; font-weight:bold; background:#a3d8d3; padding:2px 6px; border-radius:4px;">Explore Belonging Across Groups</span>
+                <span>Head to the</span> <span style="color:#003366; font-weight:bold; background:#a3d8d3; padding:2px 6px; border-radius:4px;"> Go to Visualisations </span>
                 section to see how different student groups (based on gender, grade, religion, etc) experience belonging in your school.
             </span>
             </div>
             <div style="margin-bottom: 10px;">
                 <span style="font-size:1.25rem; font-weight:700; color:#003366;">Step-4:</span>
                 <span style="font-weight:600;">
+                    Explore Data Tables</span>
+                <br>
+                    <span>Click the <span style="color:#003366; font-weight:bold; background:#fdf8b7; padding:2px 6px; border-radius:4px;">Go to data tables</span>
+                    button to get access to data tables in one view. 
+                </span>
+            </div>
+            <div style="margin-bottom: 10px;">
+                <span style="font-size:1.25rem; font-weight:700; color:#003366;">Step-5:</span>
+                <span style="font-weight:600;">
                     Download a Custom Report</span>
                 <br>
-                    <span>Click the <span style="color:#003366; font-weight:bold; background:#fdf8b7; padding:2px 6px; border-radius:4px;">Generate Report</span>
-                    button to download a personalized insights report you can share with your team.
+                    <span>Click the <span style="color:#003366; font-weight:bold; background:#a3d8d3; padding:2px 6px; border-radius:4px;">Generate Report</span>
+                    button to get key insights and charts in a PDF format to share with your team!
                 </span>
             </div>
         </div>
@@ -903,11 +912,11 @@ if st.session_state['current_page'] == 'landing':
 
     # Buttons to navigate
     col1, col2 = st.columns([1, 1])
-    with col1:
+    with col2:
         if st.button("Start Exploring", key="start_exploring_button", use_container_width=True):
             navigate_to('main')
             st.rerun()
-    with col2:
+    with col1:
         if st.button("Back to Login", key="back_to_login_from_landing", use_container_width=True):
             # Clear user-specific session state to effectively log out
             if 'logged_in_user' in st.session_state:
@@ -1125,9 +1134,6 @@ if st.session_state['current_page'] == 'main':
             st.error(f"Error processing file: {str(e)}")
             st.stop()
 
-    # Rest of your main page code (insights, dashboard, etc.) remains unchanged
-    
-    # Rest of your main page code (insights, dashboard, etc.) remains the same
     # Ensure df is not None before accessing its columns
     if df is None:
         st.error("No data available. Please upload a valid file.")
@@ -1830,7 +1836,7 @@ if st.session_state['current_page'] == 'data_table':
             religion_counts = df_cleaned[religion_col].astype(str).replace({"nan": "Unknown"}).value_counts(dropna=False)
             religion_pie_buf = pie_image_from_series(religion_counts, "Religion Distribution")
 
-    # Build constructs list table (right-rail look)
+    # # Build constructs list table (right-rail look)
     constructs_table_data = [["Construct", "Avg (1–5)"]]
     if category_averages:
         for k, v in category_averages.items():
@@ -1898,8 +1904,9 @@ if st.session_state['current_page'] == 'data_table':
         story.append(Spacer(1, 12))
 
         # Row of two big bubbles: Belonging score + N students
-        score_txt = f"<b>Belonging score</b><br/><font size=18>{(overall_belonging if overall_belonging is not None else 0):.2f}</font>"
-        n_txt     = f"<b>Number of students (N)</b><br/><font size=18>{n_students}</font>"
+        score_txt = f"<b>Belonging score</b><br/><br/><font size=18>{(overall_belonging or 0):.2f}</font>"
+        n_txt     = f"<b>Number of students (N)</b><br/><br/><font size=18>{n_students}</font>"
+
         row1 = Table([[bubble(score_txt, "#E59A86"), bubble(n_txt, "#A7E181")]],
                      colWidths=[3.1*inch, 3.1*inch])
         story.append(row1)
@@ -1923,7 +1930,7 @@ if st.session_state['current_page'] == 'data_table':
         # Add pies if available
         pie_elems = []
         if gender_pie_buf:
-            pie_elems.append(Image(gender_pie_buf, width=2.7*inch, height=2.7*inch))
+            pie_elems.append(Image(gender_pie_buf, width=2.5*inch, height=2.5*inch))
         if religion_pie_buf:
             pie_elems.append(Image(religion_pie_buf, width=2.7*inch, height=2.7*inch))
         if pie_elems:
@@ -1936,7 +1943,7 @@ if st.session_state['current_page'] == 'data_table':
             left_flow.append(elem)
             left_flow.append(Spacer(1, 10))
 
-        constructs_tbl = Table(constructs_table_data, colWidths=[2.2*inch, 1.0*inch])
+        constructs_tbl = Table(constructs_table_data, colWidths=[2.1*inch, 1.0*inch])
         constructs_tbl.setStyle(TableStyle([
             ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#F0F0F0")),
             ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#AAAAAA")),
@@ -2039,6 +2046,6 @@ if st.session_state['current_page'] == 'data_table':
                 st.warning("Please enter some feedback before submitting.")
 
     with st.expander("Need Help?"):
-        st.write("Contact us at: Phone: +91 1234567890")
+        st.write("Contact us at Email: projectapnapan@gmail.com")
 
     st.stop()
