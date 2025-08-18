@@ -39,8 +39,9 @@ def load_and_process_data(file):
     df = df.drop(columns=["unnecessary_column"])
     return df
 
-# Function to connect to Google Sheets
-def connect_to_google_sheet(sheet_name):
+@st.cache_resource
+def get_gspread_client():
+    """Establishes and caches the connection to Google Sheets for performance."""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = {
         "type": st.secrets["connections"]["gsheets"]["type"],
@@ -55,7 +56,11 @@ def connect_to_google_sheet(sheet_name):
         "client_x509_cert_url": st.secrets["connections"]["gsheets"]["client_x509_cert_url"]
     }
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
+    return gspread.authorize(creds)
+
+# Function to connect to Google Sheets
+def connect_to_google_sheet(sheet_name):
+    client = get_gspread_client()
     sheet = client.open(sheet_name).sheet1
     return sheet
 
@@ -672,6 +677,125 @@ def get_school_details(school_id):
         st.error(f"Error fetching school details: {str(e)}")
         return None, None
 
+def process_data_and_calculate_metrics(df):
+    """
+    Takes a raw DataFrame, performs all cleaning, normalization, and metric calculations.
+    This centralized function is key to the app's performance.
+    """
+    df_cleaned = df.copy()  # Work on a copy
+
+    # Define mappings inside the function for encapsulation
+    questionnaire_mapping = {
+        "Strongly Disagree": 1, "Disagree": 2, "Neutral": 3, "Agree": 4, "Strongly Agree": 5
+    }
+
+    # --- General Demographic Data Normalization (Case-Insensitive) ---
+    demographic_keywords = ["gender", "religion"]
+    for col in df_cleaned.columns:
+        if any(keyword in col.lower() for keyword in demographic_keywords):
+            df_cleaned[col] = df_cleaned[col].astype(str).str.strip().str.title()
+            df_cleaned[col] = df_cleaned[col].replace('Nan', 'Unknown')
+
+    # --- Grade Column Normalization ---
+    grade_column = next((col for col in df_cleaned.columns if "grade" in col.lower()), None)
+    if grade_column:
+        def normalize_grade(value):
+            s_val = str(value).strip()
+            numbers = re.findall(r'\d+', s_val)
+            if numbers:
+                return str(numbers[0])
+            return s_val.title() if s_val.lower() not in ['nan', ''] else 'Unknown'
+        df_cleaned[grade_column] = df_cleaned[grade_column].apply(normalize_grade)
+
+    # --- Questionnaire Mapping (convert to numeric) ---
+    questionnaire_cols = [
+        col for col in df_cleaned.columns
+        if any(str(val).strip().title() in questionnaire_mapping for val in df_cleaned[col].dropna())
+    ]
+    if questionnaire_cols:
+        for col in questionnaire_cols:
+            df_cleaned[col] = df_cleaned[col].astype(str).str.strip().str.title()
+            df_cleaned[col] = df_cleaned[col].map(questionnaire_mapping).fillna(df_cleaned[col])
+            df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors="coerce")
+
+    # --- Improved, Case-Insensitive Ethnicity Cleaning ---
+    ethnicity_column = next((col for col in df_cleaned.columns if "ethnicity" in col.lower()), None)
+    if ethnicity_column:
+        def clean_ethnicity(value):
+            v_lower = str(value).lower().strip()
+            if "general" in v_lower:
+                return "General"
+            if "sc" in v_lower:
+                return "SC"
+            if "other" in v_lower: # For OBC
+                return "OBC"
+            if "do" in v_lower: # For "Don't know"
+                return "Don't Know"
+            if "st" in v_lower:
+                return "ST"
+            return str(value).strip().title() # Default: clean and title-case unmatched values
+        df_cleaned["ethnicity_cleaned"] = df_cleaned[ethnicity_column].apply(clean_ethnicity)
+
+    # --- Define Belonging Constructs ---
+    belonging_questions = {
+        "Safety": ["safe", "surakshit"],
+        "Respect": ["respected", "izzat", "as much respect"],
+        "Welcome": ["being welcomed", "welcome", "swagat"],
+        "Relationships with Teachers": ["one teacher", "share your problem", "care about your feelings", " care about how I feel", "feel close", "close to your teachers"],
+        "Participation": ["opportunities", "participate", "school activities", "take part", "join in many activities"],
+        "Acknowledgement": ["notice", "noticed", "listen to you", "dekhein", "acknowledge", "recognized", "listen to what I say", "valued", "heard", "seen", "like you", "like me", "do something well"]
+    }
+
+    # --- Match Constructs to Question Columns ---
+    matched_questions = {
+        cat: [col for col in df_cleaned.columns if any(k.lower() in col.lower() for k in keywords)]
+        for cat, keywords in belonging_questions.items()
+    }
+
+    # --- Special Handling: "Kaash" Questions ---
+    kaash_col = [
+        col for col in df_cleaned.columns if "kaash" in col.lower()]
+    df_cleaned["KaashScore"] = (
+        df_cleaned[kaash_col].apply(pd.to_numeric, errors="coerce").mean(axis=1) if kaash_col else 0
+    )
+
+    # --- Compute Belonging Scores ---
+    belonging_cols = [col for sublist in matched_questions.values() for col in sublist]
+    if belonging_cols:
+        df_cleaned["BelongingRaw"] = df_cleaned[belonging_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+        df_cleaned["BelongingCount"] = df_cleaned[belonging_cols].apply(pd.to_numeric, errors="coerce").notna().sum(axis=1)
+        df_cleaned["BelongingScore"] = df_cleaned.apply(
+            lambda row: (row["BelongingRaw"] - row["KaashScore"]) / row["BelongingCount"] if row["BelongingCount"] > 0 else 0,
+            axis=1
+        )
+    else:
+        df_cleaned["BelongingRaw"] = 0
+        df_cleaned["BelongingCount"] = 0
+        df_cleaned["BelongingScore"] = 0
+
+    # --- Aggregate Insights ---
+    overall_belonging_score = df_cleaned["BelongingScore"].mean() if belonging_cols else None
+    category_averages = {
+        cat: df_cleaned[cols].apply(pd.to_numeric, errors='coerce').mean().mean() if cols else 0
+        for cat, cols in matched_questions.items()
+    }
+    highest_area = max(category_averages, key=category_averages.get) if category_averages else None
+    valid_categories = {k: v for k, v in category_averages.items() if v > 0.00}
+    lowest_area = min(valid_categories, key=valid_categories.get) if valid_categories else None
+
+    # --- Package results into a dictionary for clean state management ---
+    results = {
+        'df_cleaned': df_cleaned,
+        'matched_questions': matched_questions,
+        'belonging_questions': belonging_questions,
+        'overall_belonging_score': overall_belonging_score,
+        'category_averages': category_averages,
+        'highest_area': highest_area,
+        'lowest_area': lowest_area,
+        'matched_questions_table': pd.DataFrame.from_dict(matched_questions, orient="index").T.fillna("")
+    }
+    return results
+
 # Landing Page
 if st.session_state['current_page'] == 'landing':
     # Header with Project Apnapan logo and school details on the same line
@@ -974,7 +1098,28 @@ if st.session_state['current_page'] == 'main':
                 st.dataframe(df.head())
                 st.session_state["preview_table"] = df.head()
 
-            st.session_state['df_cleaned'] = df.copy()
+            # --- Centralized Processing: Process Once, Use Many ---
+            # This is the core performance improvement. All calculations happen here, once.
+            # The results are stored in the session state for other pages to use instantly.
+            with st.spinner("Analyzing your data... This may take a moment."):
+                # Clear any previous results to ensure a fresh start
+                keys_to_clear = [
+                    'df_cleaned', 'matched_questions', 'belonging_questions',
+                    'overall_belonging_score', 'category_averages', 'highest_area',
+                    'lowest_area', 'matched_questions_table', 'summary_table',
+                    'category_averages_table'
+                ]
+                for key in keys_to_clear:
+                    if key in st.session_state:
+                        del st.session_state[key]
+
+                # Process data and calculate all metrics
+                processing_results = process_data_and_calculate_metrics(df)
+                # Store all results in the session state
+                for key, value in processing_results.items():
+                    st.session_state[key] = value
+            
+            st.success("Data analysis complete! You can now explore the metrics and visualizations.")
 
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
@@ -1003,12 +1148,52 @@ if st.session_state['current_page'] == 'main':
 if st.session_state['current_page'] == 'metrics':
         st.header("Key Metrics (Scale of 5)")
 
-        # --- Ensure df_cleaned is available ---
-        if "df_cleaned" not in st.session_state or st.session_state["df_cleaned"].empty:
-            st.warning("No cleaned data available. Please upload and process a file first.")
-            st.stop()
+        # --- Retrieve pre-calculated results from session state ---
+        # All calculations are now done on the main page for performance.
+        # This page just displays the results.
+        overall_belonging_score = st.session_state.get("overall_belonging_score")
+        category_averages = st.session_state.get("category_averages", {})
+        highest_area = st.session_state.get("highest_area")
+        lowest_area = st.session_state.get("lowest_area")
+        matched_questions_df = st.session_state.get("matched_questions_table")
+
+        # --- Check if data is available ---
+        if overall_belonging_score is None:
+            st.warning("No data has been processed yet. Please go to the main page and upload a file.")
+            if st.button("Back to Upload Page"):
+                st.stop()
 
         df_cleaned = st.session_state["df_cleaned"]
+
+        # --- General Demographic Data Normalization (Case-Insensitive) ---
+        # Define keywords for common demographic columns that need case normalization.
+        # This ensures that values like "male", "Male", and "MALE" are treated as one category.
+        demographic_keywords = ["gender", "religion"]
+        
+        for col in df_cleaned.columns:
+            # Check if any keyword is in the column name (case-insensitive)
+            if any(keyword in col.lower() for keyword in demographic_keywords):
+                # Convert to string, strip whitespace, and apply Title Case.
+                df_cleaned[col] = df_cleaned[col].astype(str).str.strip().str.title()
+                # Handle 'nan' strings that might result from `astype(str)` on empty cells.
+                df_cleaned[col] = df_cleaned[col].replace('Nan', 'Unknown')
+
+        # --- Grade Column Normalization ---
+        # Find the grade column and standardize its values to ensure consistent grouping.
+        # This handles variations like "10", "Grade 10", "10th", etc.
+        grade_column = next((col for col in df_cleaned.columns if "grade" in col.lower()), None)
+        if grade_column:
+            def normalize_grade(value):
+                s_val = str(value).strip()
+                # Use regex to find all digits in the string.
+                numbers = re.findall(r'\d+', s_val)
+                if numbers:
+                    # Return the first number found as a string for consistent categorical plotting.
+                    return str(numbers[0])
+                # For non-numeric grades (e.g., 'Kindergarten') or empty values.
+                return s_val.title() if s_val.lower() not in ['nan', ''] else 'Unknown'
+
+            df_cleaned[grade_column] = df_cleaned[grade_column].apply(normalize_grade)
 
         # --- Questionnaire Mapping (convert to numeric) ---
         questionnaire_cols = [
@@ -1024,17 +1209,25 @@ if st.session_state['current_page'] == 'metrics':
         else:
             st.info("No questionnaire columns found to convert.")
 
-        # --- Clean Ethnicity (if column exists) ---
+        # --- Improved, Case-Insensitive Ethnicity Cleaning ---
         ethnicity_column = next((col for col in df_cleaned.columns if "ethnicity" in col.lower()), None)
         if ethnicity_column:
-            df_cleaned["ethnicity_cleaned"] = df_cleaned[ethnicity_column].replace({
-                v: "General" if "general" in str(v).lower() else
-                "SC" if "sc" in str(v).lower() else
-                "OBC" if "other" in str(v).lower() else
-                "Don't Know" if "do" in str(v).lower() else
-                "ST" if "st" in str(v).lower() else v
-                for v in df_cleaned[ethnicity_column]
-            })
+            # Use a mapping function for clarity, robustness, and efficiency.
+            def clean_ethnicity(value):
+                v_lower = str(value).lower().strip()
+                if "general" in v_lower:
+                    return "General"
+                if "sc" in v_lower:
+                    return "SC"
+                if "other" in v_lower: # For OBC
+                    return "OBC"
+                if "do" in v_lower: # For "Don't know"
+                    return "Don't Know"
+                if "st" in v_lower:
+                    return "ST"
+                return str(value).strip().title() # Default: clean and title-case unmatched values
+
+            df_cleaned["ethnicity_cleaned"] = df_cleaned[ethnicity_column].apply(clean_ethnicity)
 
         # --- Define Belonging Constructs ---
         belonging_questions = {
@@ -1461,6 +1654,13 @@ if st.session_state['current_page'] == 'visualisations':
                                 st.warning(f"Column '{target_col}' not found in the data.")
                             group_avg = plot_df.groupby(matched_group_col)[target_col].agg(['mean', 'count']).reset_index()
                             group_avg.columns = [matched_group_col, 'AvgScore', 'Count']
+
+                            # Special handling for 'Grade' to ensure correct numeric sorting.
+                            if label == "Grade":
+                                # Convert grade to a numeric type for sorting, coercing errors for non-numeric grades
+                                group_avg[matched_group_col] = pd.to_numeric(group_avg[matched_group_col], errors='coerce')
+                                group_avg = group_avg.sort_values(by=matched_group_col).dropna(subset=[matched_group_col])
+
                             with col_slots[chart_index % 2]:
                                 fig = px.bar(
                                     group_avg,
@@ -1495,6 +1695,11 @@ if st.session_state['current_page'] == 'visualisations':
                                     margin=dict(t=50),
                                     yaxis=dict(range=[0, max_y + 0.5]),
                                 )
+                                # For the Grade chart, explicitly set the x-axis to 'category'.
+                                # This is the most reliable way to prevent Plotly from creating a
+                                # continuous axis with decimal points for numeric-like labels.
+                                if label == "Grade":
+                                    fig.update_xaxes(type='category')
                                 config = {
                                     'displayModeBar': True,
                                     'modeBarButtonsToRemove': [
@@ -1680,20 +1885,62 @@ if st.session_state['current_page'] == 'data_table':
     # helpers to draw pies with matplotlib and return BytesIO for ReportLab
     def pie_image_from_series(series, title):
         """
+        Generates a more readable pie chart PNG in a BytesIO buffer.
+        It avoids overlapping labels by using a legend for numerous categories.
         series: pandas.Series of counts (value_counts)
-        returns: BytesIO PNG
+        title: The title for the chart.
+        returns: BytesIO PNG or None if data is empty.
         """
         buf = io.BytesIO()
         labels = series.index.astype(str).tolist()
-        sizes  = series.values.tolist()
-        if len(sizes) == 0:
+        sizes = series.values.tolist()
+        if not sizes:
             return None
 
-        fig, ax = plt.subplots(figsize=(3, 3), dpi=200)
-        ax.pie(sizes, labels=labels, autopct=lambda p: f"{p:.1f}%", startangle=140)
-        ax.axis('equal')
-        ax.set_title(title)
-        plt.tight_layout()
+        # Use a legend if there are more than 4 categories to prevent label overlap
+        show_labels_on_pie = len(labels) <= 4
+
+        # Adjust figure size to accommodate legend if needed
+        figsize = (4.5, 3) if not show_labels_on_pie else (3, 3)
+        fig, ax = plt.subplots(figsize=figsize, dpi=200)
+
+        # Use the default Plotly color sequence to match the demographic overview charts
+        plotly_default_colors = [
+            '#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
+            '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52'
+        ]
+        # Cycle through the defined colors if there are more labels than colors
+        colors_map = [plotly_default_colors[i % len(plotly_default_colors)] for i in range(len(labels))]
+
+        wedges, texts, autotexts = ax.pie(
+            sizes,
+            autopct=lambda p: f'{p:.1f}%' if p > 1 else '',  # Only show percentage for slices > 1%
+            startangle=90,
+            colors=colors_map,
+            pctdistance=0.8,  # Move percentage inside the slice
+            labels=labels if show_labels_on_pie else None,
+            labeldistance=1.1,
+            textprops={'fontsize': 7}  # Smaller font for labels on pie
+        )
+
+        # Style the percentage text for better visibility
+        for autotext in autotexts:
+            autotext.set_color('black')
+            autotext.set_weight('bold')
+            autotext.set_fontsize(7)
+
+        ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+        ax.set_title(title, fontsize=10, pad=15)
+
+        # If not showing labels on pie, add a legend outside the chart
+        if not show_labels_on_pie:
+            ax.legend(wedges, labels,
+                      title="Categories",
+                      loc="center left",
+                      bbox_to_anchor=(1, 0, 0.5, 1),
+                      fontsize='x-small')
+
+        fig.tight_layout()
         fig.savefig(buf, format="png", bbox_inches="tight")
         plt.close(fig)
         buf.seek(0)
@@ -1798,7 +2045,7 @@ if st.session_state['current_page'] == 'data_table':
 
         strong_txt = f"<b>Strongest area:</b><br/>{strong_label}<br/><font size=13>{strong_val:.2f}</font>"
         weak_txt   = f"<b>Weakest area:</b><br/>{weak_label}<br/><font size=13>{weak_val:.2f}</font>"
-        row2 = Table([[bubble(strong_txt, "#7FB3FF"), bubble(weak_txt, "#FFD29B")]],
+        row2 = Table([[bubble(strong_txt, "#636EFA"), bubble(weak_txt, "#FFD29B")]],
                      colWidths=[3.1*inch, 3.1*inch])
         story.append(row2)
         story.append(Spacer(1, 14))
