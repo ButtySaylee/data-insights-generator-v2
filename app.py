@@ -258,15 +258,21 @@ def download_file_from_mongo(school_id, filename):
 # Set page config for mobile-friendly design
 st.set_page_config(layout="wide", page_title="Data Insights Generator")
 
-# Add CSS to hide GitHub icon and creator info
-hide_github_icon = """
-<style>
-#GithubIcon {visibility: hidden;}
-.viewerBadge_container__1QSob {visibility: hidden;}
-.css-1jc7ptx, .e1ewe7hr3, .viewerBadge_container__1yB5_, .styles_viewerBadge__1yB5_ {visibility: hidden;}
-</style>
+# Inject custom CSS
+hide_streamlit_style = """
+    <style>
+    /* Hide the 'Fork' and GitHub icon */
+    [data-testid="stDecoration"] {display: none;}
+    
+    /* Hide 'Made with Streamlit' footer */
+    footer {visibility: hidden;}
+    
+    /* Hide Streamlit toolbar menu (top-right) */
+    #MainMenu {visibility: hidden;}
+    </style>
 """
-st.markdown(hide_github_icon, unsafe_allow_html=True)
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 
 # Initialize session state for navigation
 if 'current_page' not in st.session_state:
