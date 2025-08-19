@@ -269,8 +269,8 @@ def navigate_to(page):
 # Custom CSS for consistent theme and centering
 st.markdown("""
     <style>
-        .stApp {
-            background-color: #d6ecf9;
+        section.main {
+            background-color: #d6ecf9 !important;
             font-family: 'Segoe UI', sans-serif;
             color: black !important;
         }
@@ -587,8 +587,8 @@ st.markdown("""
 
 st.markdown(f"""
     <style>
-        .stApp {{
-            background-color: #d6ecf9;
+        section.main {{
+            background-color: #d6ecf9 !important;
             font-family: 'Segoe UI', sans-serif;
             color: black !important;
         }}
