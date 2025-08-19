@@ -2026,7 +2026,7 @@ if st.session_state['current_page'] == 'data_table':
     def send_feedback_to_google_sheet(feedback_text):
         try:
             sheet = connect_to_google_sheet("Apnapan Data Insights Generator Tool Feedbacks")
-            timestamp = date.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             sheet.append_row([timestamp, feedback_text])
             return True
         except Exception as e:
