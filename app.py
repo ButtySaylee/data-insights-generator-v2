@@ -352,7 +352,34 @@ st.markdown("""
         }
     </style>
 """, unsafe_allow_html=True)
-    
+
+# Add global CSS for button styling to ensure compatibility with light and dark themes
+st.markdown("""
+    <style>
+        /* General button styling for light and dark themes */
+        button, .stButton > button, .stDownloadButton > button {
+            background-color: #0a0504 !important; /* Primary button color */
+            color: white !important; /* Text color */
+            border-radius: 8px !important; /* Rounded corners */
+            border: none !important; /* Remove border */
+            font-weight: bold !important; /* Bold text */
+        }
+        button:hover, .stButton > button:hover, .stDownloadButton > button:hover {
+            background-color: #e05252 !important; /* Darker shade on hover */
+        }
+        button:focus, .stButton > button:focus, .stDownloadButton > button:focus {
+            outline: none !important; /* Remove focus outline */
+            box-shadow: 0 0 4px 2px rgba(255, 102, 102, 0.5) !important; /* Add focus shadow */
+        }
+        /* Ensure text inside all buttons is visible in both themes */
+        div[data-testid="stForm"] button p,
+        div[data-testid="stButton"] > button p,
+        div[data-testid="stDownloadButton"] button p {
+            color: white !important; /* Ensure text is white */
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 # Login Page
 if st.session_state['current_page'] == 'login':
     # Load and encode logo
@@ -1985,8 +2012,30 @@ if st.session_state['current_page'] == 'data_table':
             st.rerun()
     with colB:
         # clicking sets a flag that opens the expander automatically below
-        if st.button("Feedback", use_container_width=True):
-            st.session_state["open_feedback"] = True
+        # ---- Feedback section ----
+        if "show_feedback_form" not in st.session_state:
+            st.session_state["show_feedback_form"] = False
+
+        # Feedback button logic
+        if st.button("Feedback", use_container_width=True, key="feedback_button_main"):
+            st.session_state["show_feedback_form"] = not st.session_state["show_feedback_form"]
+
+        # Feedback form (conditionally displayed)
+    if st.session_state["show_feedback_form"]:
+        st.write("### Feedback")
+        feedback = st.text_area("Flag any issues or suggestions", key="feedback_text_area")
+        if st.button("Submit Feedback", key="submit_feedback_button"):
+            if feedback:
+                try:
+                    sheet = connect_to_google_sheet("Apnapan Data Insights Generator Tool Feedbacks")
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    sheet.append_row([timestamp, feedback])
+                    st.success("Thank you! Your feedback has been recorded.")
+                    st.session_state["show_feedback_form"] = False  # Close the form after submission
+                except Exception as e:
+                    st.error(f"Failed to send feedback: {e}")
+            else:
+                st.warning("Please enter some feedback before submitting.")
 
     # ---- Styled download button (peach) ----
     st.markdown("""
@@ -2021,29 +2070,6 @@ if st.session_state['current_page'] == 'data_table':
                 mime="application/pdf"
             )
             st.markdown('</div>', unsafe_allow_html=True)
-
-    # ---- Feedback section (opens if button pressed) ----
-    def send_feedback_to_google_sheet(feedback_text):
-        try:
-            sheet = connect_to_google_sheet("Apnapan Data Insights Generator Tool Feedbacks")
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([timestamp, feedback_text])
-            return True
-        except Exception as e:
-            st.error(f"Failed to send feedback: {e}")
-            return False
-
-    default_expanded = st.session_state.pop("open_feedback", False)
-    with st.expander("Feedback", expanded=default_expanded):
-        feedback = st.text_area("Flag any issues or suggestions")
-        if st.button("Submit Feedback"):
-            if feedback:
-                if send_feedback_to_google_sheet(feedback):
-                    st.success("Thank you! Your feedback has been recorded.")
-                else:
-                    st.error("Failed to submit feedback. Please try again later.")
-            else:
-                st.warning("Please enter some feedback before submitting.")
 
     with st.expander("Need Help?"):
         st.write("Contact us at Email: projectapnapan@gmail.com")
