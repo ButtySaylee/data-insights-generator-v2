@@ -255,7 +255,8 @@ def download_file_from_mongo(school_id, filename):
         st.error(f"Download error: {e}")
         return None
 
-import streamlit as st
+# Set page config for mobile-friendly design
+st.set_page_config(layout="wide", page_title="Data Insights Generator")
 
 # Add CSS to hide GitHub icon and creator info
 hide_github_icon = """
@@ -266,9 +267,6 @@ hide_github_icon = """
 </style>
 """
 st.markdown(hide_github_icon, unsafe_allow_html=True)
-
-# Set page config for mobile-friendly design
-st.set_page_config(layout="wide", page_title="Data Insights Generator")
 
 # Initialize session state for navigation
 if 'current_page' not in st.session_state:
