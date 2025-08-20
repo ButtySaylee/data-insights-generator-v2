@@ -161,7 +161,24 @@ def update_user_password(school_id, new_password):
     except Exception as e:
         return False, f"An error occurred while updating password: {str(e)}"
     
-
+@st.cache_data(ttl=3600)  # Cache for 1 hour to reduce API calls
+def get_school_details(school_id):
+    try:
+        sheet = connect_to_google_sheet("Apnapan User Accounts")
+        all_school_ids = sheet.col_values(1)
+        if school_id in all_school_ids:
+            row_index = all_school_ids.index(school_id) + 1
+            user_data = sheet.row_values(row_index)
+            # Assuming columns: School ID (1), Password (2), Salt (3), Email (4), School Name (5), Logo (6)
+            school_name = user_data[4]
+            logo_base64 = user_data[5]
+            return school_name, logo_base64
+        else:
+            return None, None
+    except Exception as e:
+        st.error(f"Error fetching school details: {str(e)}")
+        return None, None
+    
 # Function to get MIME type for file download
 def get_mime_type(filename):
     """Returns the MIME type based on the file extension."""
@@ -257,22 +274,6 @@ def download_file_from_mongo(school_id, filename):
 
 # Set page config for mobile-friendly design
 st.set_page_config(layout="wide", page_title="Data Insights Generator")
-
-# Inject custom CSS
-hide_streamlit_style = """
-    <style>
-    /* Hide the 'Fork' and GitHub icon */
-    [data-testid="stDecoration"] {display: none;}
-    
-    /* Hide 'Made with Streamlit' footer */
-    footer {visibility: hidden;}
-    
-    /* Hide Streamlit toolbar menu (top-right) */
-    #MainMenu {visibility: hidden;}
-    </style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
-
 
 # Initialize session state for navigation
 if 'current_page' not in st.session_state:
@@ -454,14 +455,19 @@ if st.session_state['current_page'] == 'login':
         """, unsafe_allow_html=True)
 
         if login_button:
-            success, message = validate_login(school_id, password)
-            if success:
-                st.session_state['logged_in_user'] = school_id # Store user's ID
-                st.success(message)
-                navigate_to('landing')
-                st.rerun()
-            else:
-                st.error(message)
+                success, message = validate_login(school_id, password)
+                if success:
+                    st.session_state['logged_in_user'] = school_id  # Store user's ID
+                    st.success(message)
+                    # Fetch and store school details in session state to avoid repeated API calls
+                    with st.spinner("Loading school details..."):
+                        school_name, school_logo_base64 = get_school_details(school_id)
+                        st.session_state['school_name'] = school_name
+                        st.session_state['school_logo_base64'] = school_logo_base64
+                    navigate_to('landing')
+                    st.rerun()
+                else:
+                    st.error(message)
 
         if create_account_button:
             navigate_to('create_account')
@@ -498,7 +504,7 @@ if st.session_state['current_page'] == 'create_account':
                 else:
                     st.error(message)
 
-    if st.button("Back to Login", key="back_to_login_from_create"):
+    if st.button("⮜ Back to Login", key="back_to_login_from_create"):
         navigate_to('login')
         st.rerun()
 
@@ -561,7 +567,7 @@ if st.session_state['current_page'] == 'forgot_password':
                         st.error(message)
 
     # Always show the back to login button, but handle state reset
-    if st.button("Back to Login", key="back_to_login_from_forgot"):
+    if st.button("⮜ Back to Login", key="back_to_login_from_forgot"):
         # Clean up state if user navigates away mid-process
         if 'reset_step' in st.session_state:
             del st.session_state.reset_step
@@ -703,23 +709,6 @@ sample_data = pd.DataFrame({
 })
 
 
-def get_school_details(school_id):
-    try:
-        sheet = connect_to_google_sheet("Apnapan User Accounts")
-        all_school_ids = sheet.col_values(1)
-        if school_id in all_school_ids:
-            row_index = all_school_ids.index(school_id) + 1
-            user_data = sheet.row_values(row_index)
-            # Assuming columns: School ID (1), Password (2), Salt (3), Email (4), School Name (5), Logo (6)
-            school_name = user_data[4]
-            logo_base64 = user_data[5]
-            return school_name, logo_base64
-        else:
-            return None, None
-    except Exception as e:
-        st.error(f"Error fetching school details: {str(e)}")
-        return None, None
-
 def process_data_and_calculate_metrics(df):
     """
     Takes a raw DataFrame, performs all cleaning, normalization, and metric calculations.
@@ -857,8 +846,8 @@ if st.session_state['current_page'] == 'landing':
     with col2:
         # School logo and name
         if 'logged_in_user' in st.session_state:
-            school_id = st.session_state['logged_in_user']
-            school_name, school_logo_base64 = get_school_details(school_id)
+            school_name = st.session_state.get('school_name')
+            school_logo_base64 = st.session_state.get('school_logo_base64')
 
             school_logo_html = ""
             if school_logo_base64:
@@ -957,11 +946,11 @@ if st.session_state['current_page'] == 'landing':
     # Buttons to navigate
     col1, col2 = st.columns([1, 1])
     with col2:
-        if st.button("Start Exploring", key="start_exploring_button", use_container_width=True):
+        if st.button("Start Exploring ⮞", key="start_exploring_button", use_container_width=True):
             navigate_to('main')
             st.rerun()
     with col1:
-        if st.button("Back to Login", key="back_to_login_from_landing", use_container_width=True):
+        if st.button("⮜ Back to Login", key="back_to_login_from_landing", use_container_width=True):
             # Clear user-specific session state to effectively log out
             if 'logged_in_user' in st.session_state:
                 del st.session_state['logged_in_user']
@@ -980,26 +969,9 @@ questionnaire_mapping = {
     "Strongly Agree": 5
 }
 # Add a "Back" button to navigate to the landing page
-if st.button("Back to Landing Page", key="back_button"):
+if st.button("⮜ Back to Landing Page", key="back_button"):
     navigate_to('landing')
     st.rerun()
-    
-def get_school_details(school_id):
-    try:
-        sheet = connect_to_google_sheet("Apnapan User Accounts")
-        all_school_ids = sheet.col_values(1)
-        if school_id in all_school_ids:
-            row_index = all_school_ids.index(school_id) + 1
-            user_data = sheet.row_values(row_index)
-            # Assuming columns: School ID (1), Password (2), Salt (3), Email (4), School Name (5), Logo (6)
-            school_name = user_data[4]
-            logo_base64 = user_data[5]
-            return school_name, logo_base64
-        else:
-            return None, None
-    except Exception as e:
-        st.error(f"Error fetching school details: {str(e)}")
-        return None, None
     
 # Main Page
 if st.session_state['current_page'] == 'main':
@@ -1018,8 +990,8 @@ if st.session_state['current_page'] == 'main':
     with col2:
         # School logo and name
         if 'logged_in_user' in st.session_state:
-            school_id = st.session_state['logged_in_user']
-            school_name, school_logo_base64 = get_school_details(school_id)
+            school_name = st.session_state.get('school_name')
+            school_logo_base64 = st.session_state.get('school_logo_base64')
 
             school_logo_html = ""
             if school_logo_base64:
@@ -1186,16 +1158,49 @@ if st.session_state['current_page'] == 'main':
 
     col1, col2 = st.columns([1, 1])
     with col1:
-        if st.button(" Back to Landing page", use_container_width=True):
+        if st.button(" ⮜ Back to Landing page", use_container_width=True):
             navigate_to('landing')
             st.rerun()
     with col2:
-        if st.button(" Go to Key Metrics", use_container_width=True):
+        if st.button(" Go to Key Metrics  ⮞", use_container_width=True):
             navigate_to('metrics')
             st.rerun()
     st.stop() 
 
 if st.session_state['current_page'] == 'metrics':
+        # Header with Project Apnapan logo and school details on the same line
+        col1, col2 = st.columns([4, 4])  # Adjust column widths for alignment
+
+        with col1:
+            # Project Apnapan logo and name
+            st.markdown(f"""
+                <div class="custom-logo">
+                    <img src="data:image/png;base64,{logo_base64}" alt="Project Apnapan Logo" />
+                    <span>Project Apnapan</span>
+                </div>
+            """, unsafe_allow_html=True)
+
+        with col2:
+            # School logo and name
+            if 'logged_in_user' in st.session_state:
+                school_name = st.session_state.get('school_name')
+                school_logo_base64 = st.session_state.get('school_logo_base64')
+
+                school_logo_html = ""
+                if school_logo_base64:
+                    school_logo_html = f'<img src="data:image/png;base64,{school_logo_base64}" alt="School Logo" style="height: 50px;" />'
+
+                school_name_html = ""
+                if school_name:
+                    school_name_html = f'<h4 style="margin: 0; color: #003366 !important;">{school_name}</h4>'
+
+                if school_logo_html or school_name_html:
+                    st.markdown(f"""
+                        <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding-top: 10px;">
+                            {school_logo_html}
+                            {school_name_html}
+                        </div>
+                    """, unsafe_allow_html=True) 
         st.header("Key Metrics (Scale of 5)")
 
         # --- Retrieve pre-calculated results from session state ---
@@ -1210,7 +1215,7 @@ if st.session_state['current_page'] == 'metrics':
         # --- Check if data is available ---
         if overall_belonging_score is None:
             st.warning("No data has been processed yet. Please go to the main page and upload a file.")
-            if st.button("Back to Upload Page"):
+            if st.button("⮜ Back to Upload Page"):
                 st.stop()
 
         # Show Likert scale image above the three score cards
@@ -1341,17 +1346,51 @@ if st.session_state['current_page'] == 'metrics':
         #         st.dataframe(summary)
         col1, col2 = st.columns([1, 1])
         with col1:
-         if st.button("Back to Upload Page", use_container_width=True):
+         if st.button("⮜ Back to Upload Page", use_container_width=True):
             navigate_to('main')
             st.rerun()
         with col2:
-         if st.button("Go to Visualisations" , use_container_width=True):
+         if st.button("Go to Visualisations  ⮞" , use_container_width=True):
             navigate_to('visualisations')
             st.rerun()
         st.stop()            
 
         # Explore and Customize
 if st.session_state['current_page'] == 'visualisations':
+        # Header with Project Apnapan logo and school details on the same line
+        col1, col2 = st.columns([4, 4])  # Adjust column widths for alignment
+
+        with col1:
+            # Project Apnapan logo and name
+            st.markdown(f"""
+                <div class="custom-logo">
+                    <img src="data:image/png;base64,{logo_base64}" alt="Project Apnapan Logo" />
+                    <span>Project Apnapan</span>
+                </div>
+            """, unsafe_allow_html=True)
+
+        with col2:
+            # School logo and name
+            if 'logged_in_user' in st.session_state:
+                school_name = st.session_state.get('school_name')
+                school_logo_base64 = st.session_state.get('school_logo_base64')
+
+                school_logo_html = ""
+                if school_logo_base64:
+                    school_logo_html = f'<img src="data:image/png;base64,{school_logo_base64}" alt="School Logo" style="height: 50px;" />'
+
+                school_name_html = ""
+                if school_name:
+                    school_name_html = f'<h4 style="margin: 0; color: #003366 !important;">{school_name}</h4>'
+
+                if school_logo_html or school_name_html:
+                    st.markdown(f"""
+                        <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding-top: 10px;">
+                            {school_logo_html}
+                            {school_name_html}
+                        </div>
+                    """, unsafe_allow_html=True)
+                
         st.header("Visualization Tab")
         # --- Retrieve previously saved values into the same variable names ---
         df_cleaned = st.session_state.get("df_cleaned", None)
@@ -1578,12 +1617,20 @@ if st.session_state['current_page'] == 'visualisations':
                                 # Convert grade to a numeric type for sorting, coercing errors for non-numeric grades
                                 group_avg[matched_group_col] = pd.to_numeric(group_avg[matched_group_col], errors='coerce')
                                 group_avg = group_avg.sort_values(by=matched_group_col).dropna(subset=[matched_group_col])
-
+                                # Convert back to string for plotting, ensuring it's handled as a category
+                                group_avg[matched_group_col] = group_avg[matched_group_col].astype(int).astype(str)
                             with col_slots[chart_index % 2]:
                                 # Convert the grouping column to string for discrete color mapping
                                 group_avg_display = group_avg.copy()
                                 group_avg_display[matched_group_col] = group_avg_display[matched_group_col].astype(str)
-                                
+
+                                # Define category_orders to ensure Grade is treated as a category from the start.
+                                # This is the most robust way to prevent annotation misalignment.
+                                category_orders = {}
+                                if label == "Grade":
+                                    sorted_grades = group_avg_display[matched_group_col].tolist()
+                                    category_orders[matched_group_col] = sorted_grades
+
                                 fig = px.bar(
                                     group_avg_display,
                                     x=matched_group_col,
@@ -1593,8 +1640,10 @@ if st.session_state['current_page'] == 'visualisations':
                                     labels={matched_group_col: label, "AvgScore": "Avg Score"},
                                     height=400,
                                     color=matched_group_col,
-                                    color_discrete_sequence=px.colors.qualitative.Set3
+                                    color_discrete_sequence=px.colors.qualitative.Set3,
+                                    category_orders=category_orders
                                 )
+
                                 fig.update_traces(
                                     texttemplate='N=%{text}',
                                     textposition='inside',
@@ -1610,18 +1659,19 @@ if st.session_state['current_page'] == 'visualisations':
                                         showarrow=False,
                                         yshift=20,  # Moved above the bar
                                         font=dict(color='white'),
-                                        bgcolor='rgba(0,0,0,0.5)'
+                                        bgcolor='rgba(0,0,0,0.5)',
                                     )
                                 max_y = group_avg["AvgScore"].max()
                                 fig.update_layout(
                                     margin=dict(t=50),
                                     yaxis=dict(range=[0, max_y + 0.6]),  # Added space for annotations on top
                                 )
-                                # For the Grade chart, explicitly set the x-axis to 'category'.
-                                # This is the most reliable way to prevent Plotly from creating a
-                                # continuous axis with decimal points for numeric-like labels.
+                                # For the Grade chart, explicitly set the tick values and labels.
+                                # This is the most robust way to handle the single-point case,
+                                # ensuring the bar sits over the integer label, not a decimal.
                                 if label == "Grade":
-                                    fig.update_xaxes(type='category')
+                                    grade_ticks = group_avg_display[matched_group_col].tolist()
+                                    fig.update_xaxes(tickvals=grade_ticks, ticktext=grade_ticks)
                                 config = {
                                     'displayModeBar': True,
                                     'modeBarButtonsToRemove': [
@@ -1726,12 +1776,12 @@ if st.session_state['current_page'] == 'visualisations':
         col1, col2 = st.columns([1, 1])
 
         with col1:
-            if st.button("Back to Key Metrics", use_container_width=True):
+            if st.button("⮜ Back to Key Metrics", use_container_width=True):
                 navigate_to('metrics')
                 st.rerun()
 
         with col2:
-            if st.button("Go to Data Tables", use_container_width=True):
+            if st.button("Go to Data Tables  ⮞", use_container_width=True):
                 navigate_to('data_table')
                 st.rerun()
         st.stop()
@@ -1740,6 +1790,40 @@ if st.session_state['current_page'] == 'visualisations':
 
 
 if st.session_state['current_page'] == 'data_table':
+    # Header with Project Apnapan logo and school details on the same line
+    col1, col2 = st.columns([4, 4])  # Adjust column widths for alignment
+
+    with col1:
+        # Project Apnapan logo and name
+        st.markdown(f"""
+            <div class="custom-logo">
+                <img src="data:image/png;base64,{logo_base64}" alt="Project Apnapan Logo" />
+                <span>Project Apnapan</span>
+            </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        # School logo and name
+        if 'logged_in_user' in st.session_state:
+            school_name = st.session_state.get('school_name')
+            school_logo_base64 = st.session_state.get('school_logo_base64')
+
+            school_logo_html = ""
+            if school_logo_base64:
+                school_logo_html = f'<img src="data:image/png;base64,{school_logo_base64}" alt="School Logo" style="height: 50px;" />'
+
+            school_name_html = ""
+            if school_name:
+                school_name_html = f'<h4 style="margin: 0; color: #003366 !important;">{school_name}</h4>'
+
+            if school_logo_html or school_name_html:
+                st.markdown(f"""
+                    <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding-top: 10px;">
+                        {school_logo_html}
+                        {school_name_html}
+                    </div>
+                """, unsafe_allow_html=True)
+                
     st.header(" Data Tables")
     
      # ---- pull from session_state (no hardcoded numbers) ----
@@ -1790,16 +1874,49 @@ if st.session_state['current_page'] == 'data_table':
 
     colA, colB = st.columns([1, 1])
     with colA:
-        if st.button(" Back to Visualisations", use_container_width=True):
+        if st.button("⮜ Back to Visualisations", use_container_width=True):
             navigate_to('visualisations')
             st.rerun()
     with colB:
-        if st.button(" Go to Report Generation" , use_container_width=True):
+        if st.button(" Go to Report Generation  ⮞" , use_container_width=True):
             navigate_to('customise')
             st.rerun()
 
 
 if st.session_state['current_page']=='customise':
+    # Header with Project Apnapan logo and school details on the same line
+    col1, col2 = st.columns([4, 4])  # Adjust column widths for alignment
+
+    with col1:
+        # Project Apnapan logo and name
+        st.markdown(f"""
+            <div class="custom-logo">
+                <img src="data:image/png;base64,{logo_base64}" alt="Project Apnapan Logo" />
+                <span>Project Apnapan</span>
+            </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        # School logo and name
+        if 'logged_in_user' in st.session_state:
+            school_name = st.session_state.get('school_name')
+            school_logo_base64 = st.session_state.get('school_logo_base64')
+
+            school_logo_html = ""
+            if school_logo_base64:
+                school_logo_html = f'<img src="data:image/png;base64,{school_logo_base64}" alt="School Logo" style="height: 50px;" />'
+
+            school_name_html = ""
+            if school_name:
+                school_name_html = f'<h4 style="margin: 0; color: #003366 !important;">{school_name}</h4>'
+
+            if school_logo_html or school_name_html:
+                st.markdown(f"""
+                    <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding-top: 10px;">
+                        {school_logo_html}
+                        {school_name_html}
+                    </div>
+                """, unsafe_allow_html=True)
     st.header("Report Generation:")
     st.write("Here you can generate a general report and you can also select categories and custom options for your report!")
      
@@ -3001,7 +3118,7 @@ if st.session_state['current_page']=='customise':
 
     cA, cB = st.columns([1, 1])
     with cA:
-         if st.button(" Back to Data Tables", use_container_width=True):
+         if st.button("⮜ Back to Data Tables", use_container_width=True):
             navigate_to('data_table')
             st.rerun()
     with cB:
